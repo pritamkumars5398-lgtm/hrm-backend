@@ -3,7 +3,9 @@ import { ConfigModule } from '@nestjs/config';
 import { AuthModule } from './auth/auth.module';
 import { InvitesModule } from './invites/invites.module';
 import { OrganizationsModule } from './organizations/organizations.module';
+import { PrismaModule } from './prisma/prisma.module';
 import { UsersModule } from './users/users.module';
+import { HealthController } from './health/health.controller';
 
 /**
  * Modular monolith (§5). Only auth, users, organisations and invites exist — all
@@ -14,10 +16,12 @@ import { UsersModule } from './users/users.module';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
+    PrismaModule,
     UsersModule,
     AuthModule,
     OrganizationsModule,
     InvitesModule,
   ],
+  controllers: [HealthController],
 })
 export class AppModule {}

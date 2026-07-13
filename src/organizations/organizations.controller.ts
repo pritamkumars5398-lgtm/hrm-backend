@@ -42,7 +42,7 @@ export class OrganizationsController {
     @Body() dto: CreateOrganizationDto,
     @Res({ passthrough: true }) res: Response,
   ): Promise<{ organization: Organization; user: PublicUser }> {
-    const { organization } = this.organizationsService.create({
+    const { organization } = await this.organizationsService.create({
       userId: payload.sub,
       ...dto,
     });
@@ -50,7 +50,7 @@ export class OrganizationsController {
     // The user's organizationId just changed, so the old JWT is stale — it still
     // claims organizationId: null. Re-issue it, or every later request looks
     // like the user has no company.
-    const user = this.usersService.findById(payload.sub);
+    const user = await this.usersService.findById(payload.sub);
     if (!user) throw new NotFoundException('Your account no longer exists.');
 
     const { token } = await this.authService.issueFor(user);
@@ -62,12 +62,12 @@ export class OrganizationsController {
   /** The company the signed-in user belongs to. */
   @Get('me')
   @UseGuards(JwtAuthGuard)
-  mine(@CurrentUser() payload: JwtPayload): Organization {
+  async mine(@CurrentUser() payload: JwtPayload): Promise<Organization> {
     if (!payload.organizationId) {
       throw new NotFoundException('You have not created a company yet.');
     }
 
-    const organization = this.organizationsService.findById(payload.organizationId);
+    const organization = await this.organizationsService.findById(payload.organizationId);
     if (!organization) {
       throw new NotFoundException('Company not found.');
     }

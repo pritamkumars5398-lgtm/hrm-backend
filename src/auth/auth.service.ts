@@ -16,7 +16,7 @@ export class AuthService {
     email: string;
     password: string;
   }): Promise<{ user: PublicUser; token: string }> {
-    if (this.usersService.findByEmail(params.email)) {
+    if (await this.usersService.findByEmail(params.email)) {
       throw new ConflictException('An account with this email already exists.');
     }
 
@@ -33,7 +33,7 @@ export class AuthService {
     user: PublicUser;
     token: string;
   }> {
-    const user = this.usersService.findByEmail(params.email);
+    const user = await this.usersService.findByEmail(params.email);
 
     // Identical response for an unknown email and a wrong password — telling them
     // apart is an account-enumeration leak.
@@ -56,7 +56,7 @@ export class AuthService {
     email: string;
     name: string;
   }): Promise<{ user: PublicUser; token: string }> {
-    const existing = this.usersService.findByEmail(params.email);
+    const existing = await this.usersService.findByEmail(params.email);
     if (existing) return this.issue(existing);
 
     const user = await this.usersService.create({
@@ -68,8 +68,8 @@ export class AuthService {
     return this.issue(user);
   }
 
-  me(userId: string): PublicUser {
-    const user = this.usersService.findById(userId);
+  async me(userId: string): Promise<PublicUser> {
+    const user = await this.usersService.findById(userId);
     if (!user) {
       throw new UnauthorizedException('Your account no longer exists.');
     }

@@ -14,8 +14,8 @@ export interface Invite {
   /** Opaque, unguessable — it is the only thing standing between a stranger and your org. */
   token: string;
   invitedBy: string;
-  createdAt: string;
-  expiresAt: string;
+  createdAt: Date;
+  expiresAt: Date;
 }
 
 /** The token is a credential: never return it except to the person who created the invite. */

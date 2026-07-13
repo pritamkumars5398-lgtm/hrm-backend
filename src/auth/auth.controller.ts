@@ -57,7 +57,7 @@ export class AuthController {
 
   @Get('me')
   @UseGuards(JwtAuthGuard)
-  me(@CurrentUser() payload: JwtPayload): PublicUser {
+  me(@CurrentUser() payload: JwtPayload): Promise<PublicUser> {
     return this.authService.me(payload.sub);
   }
 

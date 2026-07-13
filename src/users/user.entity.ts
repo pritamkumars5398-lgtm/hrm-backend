@@ -11,7 +11,7 @@ export interface User {
   jobTitle: string;
   role: Role;
   avatarInitials: string;
-  createdAt: string;
+  createdAt: Date;
 }
 
 /** What is safe to send to the client — never the hash. */

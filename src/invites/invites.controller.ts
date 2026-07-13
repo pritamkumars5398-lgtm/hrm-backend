@@ -58,25 +58,26 @@ export class InvitesController {
 
   @Get('members')
   @UseGuards(JwtAuthGuard)
-  members(@CurrentUser() payload: JwtPayload): PublicUser[] {
-    return this.usersService.findAllByOrganization(this.orgIdOf(payload)).map(toPublicUser);
+  async members(@CurrentUser() payload: JwtPayload): Promise<PublicUser[]> {
+    const users = await this.usersService.findAllByOrganization(this.orgIdOf(payload));
+    return users.map(toPublicUser);
   }
 
   @Delete('members/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('OWNER')
   @HttpCode(200)
-  removeMember(
+  async removeMember(
     @CurrentUser() payload: JwtPayload,
     @Param('id') id: string,
-  ): { ok: true } {
+  ): Promise<{ ok: true }> {
     const organizationId = this.orgIdOf(payload);
 
     if (id === payload.sub) {
       throw new BadRequestException('You cannot remove yourself.');
     }
 
-    const target = this.usersService.findById(id);
+    const target = await this.usersService.findById(id);
     // Scoped to the caller's company — you must not be able to delete a user
     // belonging to somebody else's org by guessing an id.
     if (!target || target.organizationId !== organizationId) {
@@ -86,7 +87,7 @@ export class InvitesController {
       throw new ForbiddenException('The owner cannot be removed.');
     }
 
-    this.usersService.remove(id);
+    await this.usersService.remove(id);
     return { ok: true };
   }
 
@@ -95,8 +96,9 @@ export class InvitesController {
   @Get('invites')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('OWNER', 'HR')
-  list(@CurrentUser() payload: JwtPayload): PublicInvite[] {
-    return this.invitesService.listByOrganization(this.orgIdOf(payload)).map(toPublicInvite);
+  async list(@CurrentUser() payload: JwtPayload): Promise<PublicInvite[]> {
+    const invites = await this.invitesService.listByOrganization(this.orgIdOf(payload));
+    return invites.map(toPublicInvite);
   }
 
   /**
@@ -107,11 +109,11 @@ export class InvitesController {
   @Post('invites')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('OWNER', 'HR')
-  create(
+  async create(
     @CurrentUser() payload: JwtPayload,
     @Body() dto: CreateInviteDto,
-  ): { invite: PublicInvite; inviteLink: string } {
-    const invite = this.invitesService.create({
+  ): Promise<{ invite: PublicInvite; inviteLink: string }> {
+    const invite = await this.invitesService.create({
       organizationId: this.orgIdOf(payload),
       email: dto.email,
       role: dto.role,
@@ -128,11 +130,11 @@ export class InvitesController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('OWNER', 'HR')
   @HttpCode(200)
-  resend(
+  async resend(
     @CurrentUser() payload: JwtPayload,
     @Param('id') id: string,
-  ): { invite: PublicInvite; inviteLink: string } {
-    const invite = this.invitesService.resend(id, this.orgIdOf(payload));
+  ): Promise<{ invite: PublicInvite; inviteLink: string }> {
+    const invite = await this.invitesService.resend(id, this.orgIdOf(payload));
 
     return {
       invite: toPublicInvite(invite),
@@ -144,19 +146,22 @@ export class InvitesController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('OWNER', 'HR')
   @HttpCode(200)
-  revoke(@CurrentUser() payload: JwtPayload, @Param('id') id: string): PublicInvite {
-    return toPublicInvite(this.invitesService.revoke(id, this.orgIdOf(payload)));
+  async revoke(
+    @CurrentUser() payload: JwtPayload,
+    @Param('id') id: string,
+  ): Promise<PublicInvite> {
+    return toPublicInvite(await this.invitesService.revoke(id, this.orgIdOf(payload)));
   }
 
   // ---- Accept (public — the invitee has no account yet) --------------------
 
   @Get('invites/preview')
-  preview(@Query('token') token: string): InvitePreview {
+  async preview(@Query('token') token: string): Promise<InvitePreview> {
     if (!token) throw new BadRequestException('This invite link is not valid.');
 
-    const invite = this.invitesService.findByToken(token);
-    const organization = this.organizationsService.findById(invite.organizationId);
-    const inviter = this.usersService.findById(invite.invitedBy);
+    const invite = await this.invitesService.findByToken(token);
+    const organization = await this.organizationsService.findById(invite.organizationId);
+    const inviter = await this.usersService.findById(invite.invitedBy);
 
     return {
       email: invite.email,
@@ -172,7 +177,7 @@ export class InvitesController {
     @Body() dto: AcceptInviteDto,
     @Res({ passthrough: true }) res: Response,
   ): Promise<PublicUser> {
-    const invite = this.invitesService.findByToken(dto.token);
+    const invite = await this.invitesService.findByToken(dto.token);
 
     // Role, email and organisation all come from the invite — never from the
     // body — or an invitee could sign up as an OWNER of any org they like.
@@ -185,7 +190,7 @@ export class InvitesController {
       organizationId: invite.organizationId,
     });
 
-    this.invitesService.markAccepted(invite.id);
+    await this.invitesService.markAccepted(invite.id);
 
     const { token } = await this.authService.issueFor(user);
     setAuthCookie(res, token, this.configService.get<string>('NODE_ENV') === 'production');

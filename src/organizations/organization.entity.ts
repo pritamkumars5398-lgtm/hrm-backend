@@ -5,7 +5,7 @@ export interface Organization {
   industry: string;
   /** The user who created it — its Owner (§11.2). */
   ownerId: string;
-  createdAt: string;
+  createdAt: Date;
 }
 
 export const INDUSTRIES = [
