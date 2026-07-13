@@ -2,7 +2,7 @@ import { Body, Controller, Get, HttpCode, Post, Res, UseGuards } from '@nestjs/c
 import { ConfigService } from '@nestjs/config';
 import type { Response } from 'express';
 import { AuthService } from './auth.service';
-import { GoogleSignInDto, LoginDto, SignupDto } from './dto/auth.dto';
+import { ChangePasswordDto, GoogleSignInDto, LoginDto, SignupDto } from './dto/auth.dto';
 import { JwtAuthGuard } from '../common/jwt-auth.guard';
 import { CurrentUser } from '../common/current-user.decorator';
 import { clearAuthCookie, setAuthCookie } from '../common/auth-cookie';
@@ -43,7 +43,9 @@ export class AuthController {
     @Body() dto: GoogleSignInDto,
     @Res({ passthrough: true }) res: Response,
   ): Promise<PublicUser> {
-    const { user, token } = await this.authService.signInWithGoogle(dto);
+    const { user, token } = await this.authService.signInWithGoogle({
+      credential: dto.credential,
+    });
     setAuthCookie(res, token, this.isProduction);
     return user;
   }
@@ -52,6 +54,17 @@ export class AuthController {
   @HttpCode(200)
   logout(@Res({ passthrough: true }) res: Response): { ok: true } {
     clearAuthCookie(res, this.isProduction);
+    return { ok: true };
+  }
+
+  @Post('change-password')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(200)
+  async changePassword(
+    @CurrentUser() payload: JwtPayload,
+    @Body() dto: ChangePasswordDto,
+  ): Promise<{ ok: true }> {
+    await this.authService.changePassword(payload.sub, dto.currentPassword, dto.newPassword);
     return { ok: true };
   }
 

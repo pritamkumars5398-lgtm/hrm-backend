@@ -8,13 +8,15 @@ import { UsersModule } from '../users/users.module';
 
 @Module({
   imports: [
+    // ConfigModule is imported so ConfigService is available in AuthService
+    // (needed to read GOOGLE_CLIENT_ID when constructing the OAuth2Client).
+    ConfigModule,
     UsersModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
         secret: config.getOrThrow<string>('JWT_SECRET'),
-        // `expiresIn` is a `ms` duration literal, not an arbitrary string.
         signOptions: {
           expiresIn: (config.get<string>('JWT_EXPIRES_IN') ??
             '7d') as JwtSignOptions['expiresIn'],

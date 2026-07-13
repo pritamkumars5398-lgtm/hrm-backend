@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   NotFoundException,
+  Patch,
   Post,
   Res,
   UseGuards,
@@ -10,7 +11,8 @@ import {
 import { ConfigService } from '@nestjs/config';
 import type { Response } from 'express';
 import { OrganizationsService } from './organizations.service';
-import { CreateOrganizationDto } from './dto/create-organization.dto';
+import { CreateOrganizationDto, UpdateOrganizationDto } from './dto/create-organization.dto';
+import { Roles, RolesGuard } from '../common/roles.guard';
 import { INDUSTRIES, type Organization } from './organization.entity';
 import { AuthService } from '../auth/auth.service';
 import { UsersService } from '../users/users.service';
@@ -57,6 +59,21 @@ export class OrganizationsController {
     setAuthCookie(res, token, this.configService.get<string>('NODE_ENV') === 'production');
 
     return { organization, user: toPublicUser(user) };
+  }
+
+  /** Company profile edits (Settings). Owner-only — HR and Manager are refused. */
+  @Patch('me')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('OWNER')
+  async update(
+    @CurrentUser() payload: JwtPayload,
+    @Body() dto: UpdateOrganizationDto,
+  ): Promise<Organization> {
+    if (!payload.organizationId) {
+      throw new NotFoundException('You have not created a company yet.');
+    }
+
+    return this.organizationsService.update(payload.organizationId, dto);
   }
 
   /** The company the signed-in user belongs to. */

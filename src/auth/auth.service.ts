@@ -1,15 +1,29 @@
-import { ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  UnauthorizedException,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
+import { OAuth2Client } from 'google-auth-library';
 import { UsersService } from '../users/users.service';
 import { toPublicUser, type PublicUser, type User } from '../users/user.entity';
 import type { JwtPayload } from '../common/jwt-payload';
 
 @Injectable()
 export class AuthService {
+  private readonly googleClient: OAuth2Client;
+
   constructor(
     private readonly usersService: UsersService,
     private readonly jwtService: JwtService,
-  ) {}
+    private readonly configService: ConfigService,
+  ) {
+    this.googleClient = new OAuth2Client(
+      this.configService.getOrThrow<string>('GOOGLE_CLIENT_ID'),
+    );
+  }
 
   async signup(params: {
     fullName: string;
@@ -48,24 +62,76 @@ export class AuthService {
   }
 
   /**
-   * Placeholder for the real exchange: the client will send a Google id_token,
-   * this verifies it against Google's certs, and only then trusts the email.
-   * Trusting a client-supplied email would let anyone sign in as anyone.
+   * Verifies a signed Google id_token (from the GIS SDK) against Google's
+   * public JWKS. Only after the signature is valid and the audience matches our
+   * client ID do we trust the email and name inside it.
+   *
+   * Never accept a plain email/name from the client — anyone could claim any
+   * address without this proof step.
    */
-  async signInWithGoogle(params: {
-    email: string;
-    name: string;
-  }): Promise<{ user: PublicUser; token: string }> {
-    const existing = await this.usersService.findByEmail(params.email);
+  async signInWithGoogle(params: { credential: string }): Promise<{
+    user: PublicUser;
+    token: string;
+  }> {
+    let email: string;
+    let name: string;
+
+    try {
+      const ticket = await this.googleClient.verifyIdToken({
+        idToken: params.credential,
+        audience: this.configService.getOrThrow<string>('GOOGLE_CLIENT_ID'),
+      });
+
+      const payload = ticket.getPayload();
+      if (!payload?.email) {
+        throw new Error('Token payload missing email.');
+      }
+
+      email = payload.email;
+      name = payload.name ?? payload.email.split('@')[0];
+    } catch {
+      throw new UnauthorizedException(
+        'Google sign-in failed — the token could not be verified.',
+      );
+    }
+
+    const existing = await this.usersService.findByEmail(email);
     if (existing) return this.issue(existing);
 
     const user = await this.usersService.create({
-      email: params.email,
+      email,
+      // A Google-only account has no local password.
       password: null,
-      name: params.name,
+      name,
     });
 
     return this.issue(user);
+  }
+
+  /**
+   * Requires the current password even though the caller is already signed in:
+   * it stops someone who walked up to an unlocked laptop from silently taking
+   * the account over.
+   */
+  async changePassword(
+    userId: string,
+    currentPassword: string,
+    newPassword: string,
+  ): Promise<void> {
+    const user = await this.usersService.findById(userId);
+    if (!user) throw new UnauthorizedException('Your account no longer exists.');
+
+    // A Google-only account has no local password to verify against.
+    if (!user.passwordHash) {
+      throw new BadRequestException(
+        'This account signs in with Google and has no password to change.',
+      );
+    }
+
+    const ok = await this.usersService.verifyPassword(user, currentPassword);
+    if (!ok) throw new UnauthorizedException('Your current password is not correct.');
+
+    await this.usersService.updatePassword(userId, newPassword);
   }
 
   async me(userId: string): Promise<PublicUser> {
@@ -94,3 +160,5 @@ export class AuthService {
     };
   }
 }
+
+

@@ -41,6 +41,21 @@ export class OrganizationsService implements OnModuleInit {
     return this.prisma.organization.findUnique({ where: { id } }) as Promise<Organization | null>;
   }
 
+  /** Company profile edits from Settings. Owner-only — enforced at the controller. */
+  async update(
+    id: string,
+    patch: { name?: string; address?: string; industry?: string },
+  ): Promise<Organization> {
+    return (await this.prisma.organization.update({
+      where: { id },
+      data: {
+        ...(patch.name ? { name: patch.name.trim() } : {}),
+        ...(patch.address ? { address: patch.address.trim() } : {}),
+        ...(patch.industry ? { industry: patch.industry } : {}),
+      },
+    })) as Organization;
+  }
+
   /**
    * Creates the company and makes the caller its Owner. Refuses if they already
    * belong to one — otherwise a repeated submit would orphan the first company

@@ -153,6 +153,13 @@ export class UsersService implements OnModuleInit {
     })) as User;
   }
 
+  async updatePassword(userId: string, newPassword: string): Promise<void> {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { passwordHash: await bcrypt.hash(newPassword, BCRYPT_ROUNDS) },
+    });
+  }
+
   async remove(userId: string): Promise<void> {
     await this.prisma.user.delete({ where: { id: userId } });
   }
