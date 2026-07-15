@@ -2,14 +2,11 @@ import type { Role } from '../users/user.entity';
 
 export type InviteStatus = 'PENDING' | 'ACCEPTED' | 'REVOKED';
 
-/** Only these two can be invited — an org has exactly one Owner (§11.3). */
-export type InvitableRole = Extract<Role, 'HR' | 'MANAGER'>;
-
 export interface Invite {
   id: string;
   organizationId: string;
   email: string;
-  role: InvitableRole;
+  permissions: string[];
   status: InviteStatus;
   /** Opaque, unguessable — it is the only thing standing between a stranger and your org. */
   token: string;

@@ -40,7 +40,7 @@ export class AuthService {
       name: params.fullName,
     });
 
-    return this.issue(user);
+    return this.issue(user, []);
   }
 
   async login(params: { email: string; password: string }): Promise<{
@@ -58,7 +58,8 @@ export class AuthService {
       );
     }
 
-    return this.issue(user);
+    const memberships = await this.usersService.getMemberships(user.id);
+    return this.issue(user, memberships);
   }
 
   /**
@@ -96,7 +97,10 @@ export class AuthService {
     }
 
     const existing = await this.usersService.findByEmail(email);
-    if (existing) return this.issue(existing);
+    if (existing) {
+      const memberships = await this.usersService.getMemberships(existing.id);
+      return this.issue(existing, memberships);
+    }
 
     const user = await this.usersService.create({
       email,
@@ -105,7 +109,7 @@ export class AuthService {
       name,
     });
 
-    return this.issue(user);
+    return this.issue(user, []);
   }
 
   /**
@@ -139,23 +143,23 @@ export class AuthService {
     if (!user) {
       throw new UnauthorizedException('Your account no longer exists.');
     }
-    return toPublicUser(user);
+    const memberships = await this.usersService.getMemberships(user.id);
+    return toPublicUser(user, memberships);
   }
 
   /** Re-issues the token after the org is created, so the JWT carries the new organizationId. */
   async issueFor(user: User): Promise<{ user: PublicUser; token: string }> {
-    return this.issue(user);
+    const memberships = await this.usersService.getMemberships(user.id);
+    return this.issue(user, memberships);
   }
 
-  private async issue(user: User): Promise<{ user: PublicUser; token: string }> {
+  private async issue(user: User, memberships: any[]): Promise<{ user: PublicUser; token: string }> {
     const payload: JwtPayload = {
       sub: user.id,
-      organizationId: user.organizationId,
-      role: user.role,
     };
 
     return {
-      user: toPublicUser(user),
+      user: toPublicUser(user, memberships),
       token: await this.jwtService.signAsync(payload),
     };
   }

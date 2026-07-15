@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -12,7 +13,6 @@ import { ConfigService } from '@nestjs/config';
 import type { Response } from 'express';
 import { OrganizationsService } from './organizations.service';
 import { CreateOrganizationDto, UpdateOrganizationDto } from './dto/create-organization.dto';
-import { Roles, RolesGuard } from '../common/roles.guard';
 import { INDUSTRIES, type Organization } from './organization.entity';
 import { AuthService } from '../auth/auth.service';
 import { UsersService } from '../users/users.service';
@@ -20,7 +20,9 @@ import { JwtAuthGuard } from '../common/jwt-auth.guard';
 import { CurrentUser } from '../common/current-user.decorator';
 import { setAuthCookie } from '../common/auth-cookie';
 import type { JwtPayload } from '../common/jwt-payload';
-import { toPublicUser, type PublicUser } from '../users/user.entity';
+import { PermissionsGuard, RequirePermission } from '../common/permissions.guard';
+import { CurrentMembership } from '../common/current-membership.decorator';
+import { toPublicUser, type PublicUser, type Membership } from '../users/user.entity';
 
 @Controller('organizations')
 export class OrganizationsController {
@@ -42,49 +44,38 @@ export class OrganizationsController {
   async create(
     @CurrentUser() payload: JwtPayload,
     @Body() dto: CreateOrganizationDto,
-    @Res({ passthrough: true }) res: Response,
   ): Promise<{ organization: Organization; user: PublicUser }> {
     const { organization } = await this.organizationsService.create({
       userId: payload.sub,
       ...dto,
     });
 
-    // The user's organizationId just changed, so the old JWT is stale — it still
-    // claims organizationId: null. Re-issue it, or every later request looks
-    // like the user has no company.
     const user = await this.usersService.findById(payload.sub);
     if (!user) throw new NotFoundException('Your account no longer exists.');
-
-    const { token } = await this.authService.issueFor(user);
-    setAuthCookie(res, token, this.configService.get<string>('NODE_ENV') === 'production');
-
-    return { organization, user: toPublicUser(user) };
+    
+    const memberships = await this.usersService.getMemberships(user.id);
+    return { organization, user: toPublicUser(user, memberships) };
   }
 
-  /** Company profile edits (Settings). Owner-only — HR and Manager are refused. */
+  /** Company profile edits (Settings). */
   @Patch('me')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('OWNER')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission('settings.manage')
   async update(
-    @CurrentUser() payload: JwtPayload,
+    @CurrentMembership() membership: Membership,
     @Body() dto: UpdateOrganizationDto,
   ): Promise<Organization> {
-    if (!payload.organizationId) {
-      throw new NotFoundException('You have not created a company yet.');
-    }
-
-    return this.organizationsService.update(payload.organizationId, dto);
+    return this.organizationsService.update(membership.organizationId, dto);
   }
 
-  /** The company the signed-in user belongs to. */
+  /** The active company the signed-in user belongs to, based on X-Workspace-Id. */
   @Get('me')
-  @UseGuards(JwtAuthGuard)
-  async mine(@CurrentUser() payload: JwtPayload): Promise<Organization> {
-    if (!payload.organizationId) {
-      throw new NotFoundException('You have not created a company yet.');
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  async mine(@CurrentMembership() membership: Membership | undefined): Promise<Organization> {
+    if (!membership) {
+      throw new BadRequestException('X-Workspace-Id header is required.');
     }
-
-    const organization = await this.organizationsService.findById(payload.organizationId);
+    const organization = await this.organizationsService.findById(membership.organizationId);
     if (!organization) {
       throw new NotFoundException('Company not found.');
     }

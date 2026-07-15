@@ -15,17 +15,68 @@ datasource db {
 model User {
   // A plain string _id, not an ObjectId, so seeded ids stay readable (usr-1).
   id             String  @id @map("_id")
-  // null between signup and creating the company (§11.2).
-  organizationId String?
   email          String  @unique
   // bcrypt hash. Empty for Google accounts, which have no local password.
   passwordHash   String
+  requiresPasswordReset Boolean @default(false)
   name           String
-  jobTitle       String
-  role           String
   avatarInitials String
   createdAt      DateTime @default(now())
+}
 
+type FinancialDetails {
+  accName   String
+  accNumber String
+  bankName  String
+  ifscCode  String
+}
+
+type EducationDetail {
+  degree      String
+  institution String
+  year        String
+}
+
+type FamilyDetail {
+  name          String
+  relationship  String
+  contactNumber String?
+}
+
+model Employee {
+  id               String   @id @map("_id")
+  userId           String
+  organizationId   String
+  // Optional because MongoDB is schemaless: Employee records created before these
+  // fields existed have no value for them, and reads must not fail on that null.
+  employeeId       String?
+  firstName        String
+  lastName         String
+  contactNumber    String?
+  homeAddress      String?
+  jobTitle         String
+  department       String
+  startDate        DateTime
+  employmentType   String
+  workLocation     String
+  financialDetails FinancialDetails?
+  educationDetails EducationDetail[]
+  familyDetails    FamilyDetail[]
+  createdAt        DateTime @default(now())
+
+  @@unique([userId, organizationId])
+  @@index([organizationId])
+}
+
+model Membership {
+  id             String   @id @map("_id")
+  userId         String
+  organizationId String
+  jobTitle       String
+  permissions    String[]
+  createdAt      DateTime @default(now())
+
+  @@unique([userId, organizationId])
   @@index([organizationId])
 }
 
@@ -42,7 +93,7 @@ model Invite {
   id             String   @id @map("_id")
   organizationId String
   email          String
-  role           String
+  permissions    String[]
   status         String
   // The credential that grants access to an organisation — unique and unguessable.
   token          String   @unique

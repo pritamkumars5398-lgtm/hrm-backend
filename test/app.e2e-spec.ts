@@ -55,8 +55,8 @@ describe('Auth + Organizations (e2e)', () => {
         .expect(200);
 
       expect(res.body.email).toBe('owner@demo.com');
-      expect(res.body.role).toBe('OWNER');
-      expect(res.body.organizationId).toBe('org-alderway');
+      expect(res.body.memberships[0].organizationId).toBe('org-alderway');
+      expect(res.body.memberships[0].permissions).toContain('*');
 
       // The password hash must never reach the client.
       expect(res.body.passwordHash).toBeUndefined();
@@ -90,7 +90,7 @@ describe('Auth + Organizations (e2e)', () => {
         .expect(200);
 
       expect(me.body.email).toBe('hr@demo.com');
-      expect(me.body.role).toBe('HR');
+      expect(me.body.memberships[0].permissions).toContain('team.invite');
     });
   });
 
@@ -121,8 +121,7 @@ describe('Auth + Organizations (e2e)', () => {
         .expect(201);
 
       // Signing up creates a person, not yet a company (§11.2).
-      expect(signup.body.organizationId).toBeNull();
-      expect(signup.body.role).toBe('OWNER');
+      expect(signup.body.memberships).toEqual([]);
 
       const created = await request(server())
         .post('/organizations')
@@ -136,23 +135,22 @@ describe('Auth + Organizations (e2e)', () => {
         .expect(201);
 
       expect(created.body.organization.ownerId).toBe(signup.body.id);
-      expect(created.body.user.organizationId).toBe(created.body.organization.id);
+      expect(created.body.user.memberships[0].organizationId).toBe(created.body.organization.id);
 
-      // The JWT must be re-issued, or it still claims organizationId: null.
-      const refreshed = authCookie(created);
-      expect(refreshed).not.toBe('');
-
+      const refreshed = authCookie(signup); // JWT didn't change
+      
       const me = await request(server()).get('/auth/me').set('Cookie', refreshed).expect(200);
-      expect(me.body.organizationId).toBe(created.body.organization.id);
+      expect(me.body.memberships[0].organizationId).toBe(created.body.organization.id);
 
       const mine = await request(server())
         .get('/organizations/me')
         .set('Cookie', refreshed)
+        .set('X-Workspace-Id', created.body.organization.id)
         .expect(200);
       expect(mine.body.name).toBe('Newco Ltd');
     });
 
-    it('refuses a second company for someone who already has one', async () => {
+    it('allows a second company for someone who already has one', async () => {
       const login = await request(server())
         .post('/auth/login')
         .send({ email: 'owner@demo.com', password: 'demo1234' })
@@ -162,7 +160,7 @@ describe('Auth + Organizations (e2e)', () => {
         .post('/organizations')
         .set('Cookie', authCookie(login))
         .send({ name: 'Second Co', address: 'Somewhere', industry: 'Healthcare' })
-        .expect(409);
+        .expect(201);
     });
 
     it('rejects a duplicate signup email', async () => {

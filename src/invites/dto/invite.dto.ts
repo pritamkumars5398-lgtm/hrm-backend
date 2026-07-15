@@ -1,32 +1,111 @@
-import { IsEmail, IsIn, IsString, MinLength } from 'class-validator';
-import type { InvitableRole } from '../invite.entity';
+import { IsEmail, IsIn, IsString, IsOptional, ValidateNested, IsArray } from 'class-validator';
+import { Type } from 'class-transformer';
+
+export class FinancialDetailsDto {
+  @IsString()
+  accName!: string;
+
+  @IsString()
+  accNumber!: string;
+
+  @IsString()
+  bankName!: string;
+
+  @IsString()
+  ifscCode!: string;
+}
+
+export class EducationDetailDto {
+  @IsString()
+  degree!: string;
+
+  @IsString()
+  institution!: string;
+
+  @IsString()
+  year!: string;
+}
+
+export class FamilyDetailDto {
+  @IsString()
+  name!: string;
+
+  @IsString()
+  relationship!: string;
+
+  @IsString()
+  @IsOptional()
+  contactNumber?: string;
+}
 
 export class CreateInviteDto {
   @IsEmail({}, { message: 'That does not look like an email.' })
   email!: string;
 
-  // OWNER is deliberately absent: a company has one Owner, and an invite must
-  // never be able to mint another (§11.3).
-  @IsIn(['HR', 'MANAGER'], { message: 'Choose either HR or Manager.' })
-  role!: InvitableRole;
-}
+  @IsString({ each: true })
+  permissions!: string[];
 
-export class AcceptInviteDto {
-  @IsString()
-  token!: string;
+  // Which entry point triggered this. Only 'employee-management' creates an
+  // Employee HR record; a Team Members invite creates User + Membership only (§9).
+  @IsIn(['employee-management', 'team-members'])
+  @IsOptional()
+  source?: 'employee-management' | 'team-members';
 
+  // Optional HR data, populated when invited via "Add Employee" flow
   @IsString()
-  @MinLength(2, { message: 'That name looks too short.' })
-  fullName!: string;
-
-  @IsString()
-  @MinLength(1, { message: 'Enter your phone number.' })
-  phone!: string;
+  @IsOptional()
+  firstName?: string;
 
   @IsString()
-  @MinLength(1, { message: 'Enter your job title.' })
-  jobTitle!: string;
+  @IsOptional()
+  lastName?: string;
 
-  @MinLength(8, { message: 'Use at least 8 characters.' })
-  password!: string;
+  @IsString()
+  @IsOptional()
+  jobTitle?: string;
+
+  @IsString()
+  @IsOptional()
+  department?: string;
+
+  @IsString()
+  @IsOptional()
+  startDate?: string;
+
+  @IsString()
+  @IsOptional()
+  employmentType?: string;
+
+  @IsString()
+  @IsOptional()
+  workLocation?: string;
+
+  @IsString()
+  @IsOptional()
+  employeeId?: string;
+
+  @IsString()
+  @IsOptional()
+  contactNumber?: string;
+
+  @IsString()
+  @IsOptional()
+  homeAddress?: string;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => FinancialDetailsDto)
+  financialDetails?: FinancialDetailsDto;
+
+  @IsArray()
+  @IsOptional()
+  @ValidateNested({ each: true })
+  @Type(() => EducationDetailDto)
+  educationDetails?: EducationDetailDto[];
+
+  @IsArray()
+  @IsOptional()
+  @ValidateNested({ each: true })
+  @Type(() => FamilyDetailDto)
+  familyDetails?: FamilyDetailDto[];
 }

@@ -7,7 +7,26 @@ import {
 import { randomBytes, randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
-import type { Invite, InvitableRole } from './invite.entity';
+import type { Invite } from './invite.entity';
+
+type FinancialDetailsInput = {
+  accName: string;
+  accNumber: string;
+  bankName: string;
+  ifscCode: string;
+};
+
+type EducationDetailInput = {
+  degree: string;
+  institution: string;
+  year: string;
+};
+
+type FamilyDetailInput = {
+  name: string;
+  relationship: string;
+  contactNumber?: string;
+};
 
 const EXPIRY_DAYS = 7;
 
@@ -31,36 +50,114 @@ export class InvitesService {
   async create(params: {
     organizationId: string;
     email: string;
-    role: InvitableRole;
+    permissions: string[];
     invitedBy: string;
-  }): Promise<Invite> {
+    source?: 'employee-management' | 'team-members';
+    // HR Data
+    firstName?: string;
+    lastName?: string;
+    jobTitle?: string;
+    department?: string;
+    startDate?: string;
+    employmentType?: string;
+    workLocation?: string;
+    employeeId?: string;
+    contactNumber?: string;
+    homeAddress?: string;
+    financialDetails?: FinancialDetailsInput;
+    educationDetails?: EducationDetailInput[];
+    familyDetails?: FamilyDetailInput[];
+  }): Promise<{ invite: Invite; tempPassword: string | null }> {
     const email = params.email.trim().toLowerCase();
-
-    if (await this.usersService.findByEmail(email)) {
-      throw new ConflictException('That person already has an account.');
-    }
 
     const outstanding = await this.prisma.invite.findFirst({
       where: { organizationId: params.organizationId, email, status: 'PENDING' },
     });
     if (outstanding) {
-      throw new ConflictException('There is already a pending invite for that email.');
+      throw new ConflictException('There is already a pending invite for that email in this company.');
     }
 
-    const now = new Date();
+    let user = await this.usersService.findByEmail(email);
+    let tempPassword: string | null = null;
 
-    return (await this.prisma.invite.create({
+    if (!user) {
+      // 1. Generate temp password
+      tempPassword = randomBytes(4).toString('hex'); // 8 char hex
+      // 2. Create User
+      const nameFallback = params.firstName ? `${params.firstName} ${params.lastName || ''}`.trim() : email.split('@')[0];
+      user = await this.usersService.create({
+        email,
+        password: tempPassword,
+        name: nameFallback,
+        requiresPasswordReset: true,
+      });
+    }
+
+    // 3. Create Membership
+    const existingMembership = await this.prisma.membership.findFirst({
+      where: { userId: user.id, organizationId: params.organizationId }
+    });
+    
+    if (!existingMembership) {
+      await this.prisma.membership.create({
+        data: {
+          id: `mem-${randomUUID().slice(0, 8)}`,
+          userId: user.id,
+          organizationId: params.organizationId,
+          jobTitle: params.jobTitle || 'Employee',
+          permissions: params.permissions,
+        },
+      });
+    }
+
+    // 4. Create Employee record ONLY for the Employee Management entry point.
+    //    A Team Members invite is access-control only — User + Membership, no HR
+    //    record (§9). Legacy calls without a source default to team-members.
+    if (params.source === 'employee-management') {
+      const existingEmployee = await this.prisma.employee.findFirst({
+        where: { userId: user.id, organizationId: params.organizationId }
+      });
+
+      if (!existingEmployee) {
+        await this.prisma.employee.create({
+          data: {
+            id: `emp-${randomUUID().slice(0, 8)}`,
+            userId: user.id,
+            organizationId: params.organizationId,
+            employeeId: params.employeeId || '',
+            firstName: params.firstName || user.name.split(' ')[0] || '',
+            lastName: params.lastName || user.name.split(' ').slice(1).join(' ') || '',
+            contactNumber: params.contactNumber || '',
+            homeAddress: params.homeAddress || '',
+            jobTitle: params.jobTitle || '',
+            department: params.department || '',
+            startDate: params.startDate ? new Date(params.startDate) : new Date(),
+            employmentType: params.employmentType || '',
+            workLocation: params.workLocation || '',
+            ...(params.financialDetails ? { financialDetails: params.financialDetails } : {}),
+            ...(params.educationDetails?.length ? { educationDetails: params.educationDetails } : {}),
+            ...(params.familyDetails?.length ? { familyDetails: params.familyDetails } : {}),
+          },
+        });
+      }
+    }
+
+    // 5. Create Invite record
+    const now = new Date();
+    const invite = (await this.prisma.invite.create({
       data: {
         id: `inv-${randomUUID().slice(0, 8)}`,
         organizationId: params.organizationId,
         email,
-        role: params.role,
+        permissions: params.permissions,
         status: 'PENDING',
         token: this.newToken(),
         invitedBy: params.invitedBy,
         expiresAt: this.expiryFrom(now),
       },
     })) as Invite;
+
+    return { invite, tempPassword };
   }
 
   listByOrganization(organizationId: string): Promise<Invite[]> {
@@ -112,34 +209,5 @@ export class InvitesService {
         expiresAt: this.expiryFrom(now),
       },
     })) as Invite;
-  }
-
-  /** Used by the accept-invite screen to show who is inviting you, and to what. */
-  async findByToken(token: string): Promise<Invite> {
-    const invite = (await this.prisma.invite.findUnique({ where: { token } })) as Invite | null;
-
-    if (!invite) {
-      throw new NotFoundException('This invite link is not valid.');
-    }
-    if (invite.status === 'REVOKED') {
-      throw new BadRequestException('This invite has been revoked.');
-    }
-    if (invite.status === 'ACCEPTED') {
-      throw new BadRequestException('This invite has already been used.');
-    }
-    if (invite.expiresAt < new Date()) {
-      throw new BadRequestException('This invite link has expired. Ask for a new one.');
-    }
-
-    return invite;
-  }
-
-  /**
-   * Marks the invite used. The token is kept rather than rotated: `findByToken`
-   * already refuses anything not PENDING, so replay is blocked either way — and
-   * keeping it lets a reused link say "already used" instead of "not valid".
-   */
-  async markAccepted(id: string): Promise<void> {
-    await this.prisma.invite.update({ where: { id }, data: { status: 'ACCEPTED' } });
   }
 }

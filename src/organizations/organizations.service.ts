@@ -6,10 +6,9 @@ import type { Organization } from './organization.entity';
 
 /**
  * Organisation + membership is **access-control**, which §11.4 puts inside this
- * phase's backend scope. Membership is deliberately modelled as a field on the
- * user (`organizationId` + `role`), because §11.3 fixes one user to exactly one
- * company for now. Multi-company membership is a Phase 2+ idea, and modelling it
- * early would cost more than it saves.
+ * phase's backend scope. Membership is its own model (`Membership`) linking a
+ * user to a company with a granular permission list, so one user can belong to
+ * several companies with different rights in each (§10, §11.3).
  */
 @Injectable()
 export class OrganizationsService implements OnModuleInit {
@@ -20,21 +19,35 @@ export class OrganizationsService implements OnModuleInit {
     private readonly usersService: UsersService,
   ) {}
 
-  /** The company the three seeded demo accounts belong to (§9). Idempotent. */
+  /**
+   * The company the three seeded demo accounts belong to (§9). Idempotent.
+   * findUnique + create rather than `upsert`, which would need Mongo transactions
+   * (a replica set) and crash startup on a standalone mongod — see UsersService.
+   */
   async onModuleInit(): Promise<void> {
-    await this.prisma.organization.upsert({
-      where: { id: 'org-alderway' },
-      update: {},
-      create: {
-        id: 'org-alderway',
-        name: 'Alderway Labs',
-        address: '4 Wharf Road, London, E15 2QR, United Kingdom',
-        industry: 'Software & Technology',
-        ownerId: 'usr-1',
-      },
-    });
+    // Non-fatal, same reasoning as UsersService.onModuleInit: a DB blip at boot
+    // must not stop the API from listening.
+    try {
+      const existing = await this.prisma.organization.findUnique({ where: { id: 'org-alderway' } });
+      if (!existing) {
+        await this.prisma.organization.create({
+          data: {
+            id: 'org-alderway',
+            name: 'Alderway Labs',
+            address: '4 Wharf Road, London, E15 2QR, United Kingdom',
+            industry: 'Software & Technology',
+            ownerId: 'usr-1',
+          },
+        });
+      }
 
-    this.logger.log('Seeded demo organisation');
+      this.logger.log('Seeded demo organisation');
+    } catch (error) {
+      this.logger.error(
+        'Skipped demo organisation seeding — database unreachable at boot.',
+        error instanceof Error ? error.message : String(error),
+      );
+    }
   }
 
   findById(id: string): Promise<Organization | null> {
@@ -69,9 +82,8 @@ export class OrganizationsService implements OnModuleInit {
     jobTitle?: string;
   }): Promise<{ organization: Organization }> {
     const user = await this.usersService.findById(params.userId);
-
-    if (user?.organizationId) {
-      throw new ConflictException('You already belong to a company.');
+    if (!user) {
+      throw new ConflictException('User not found.');
     }
 
     const organization = (await this.prisma.organization.create({
