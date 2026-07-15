@@ -16,6 +16,7 @@ import { InvitesService } from './invites.service';
 import { CreateInviteDto } from './dto/invite.dto';
 import { toPublicInvite, type PublicInvite } from './invite.entity';
 import { UsersService } from '../users/users.service';
+import { EmployeesService } from '../employees/employees.service';
 import { JwtAuthGuard } from '../common/jwt-auth.guard';
 import { PermissionsGuard, RequirePermission } from '../common/permissions.guard';
 import { CurrentMembership } from '../common/current-membership.decorator';
@@ -26,6 +27,7 @@ export class InvitesController {
   constructor(
     private readonly invitesService: InvitesService,
     private readonly usersService: UsersService,
+    private readonly employeesService: EmployeesService,
     private readonly configService: ConfigService,
   ) {}
 
@@ -36,9 +38,21 @@ export class InvitesController {
   @RequirePermission('team.view')
   async members(@CurrentMembership() membership: Membership): Promise<PublicUser[]> {
     const users = await this.usersService.findAllByOrganization(membership.organizationId);
-    // findAllByOrganization now returns the user objects with membership injected, 
-    // but toPublicUser will strip passwordHash.
-    return users.map(u => toPublicUser(u, [u as any]));
+    // Build a real Membership-shaped object for each — NOT `u as any`. That cast
+    // reused the raw user record (passwordHash included) as the membership
+    // entry: `toPublicUser` only strips the hash from the top level, so it was
+    // leaking straight through inside `memberships[0]`.
+    return users.map((u) =>
+      toPublicUser(u, [
+        {
+          id: u.membershipId,
+          userId: u.id,
+          organizationId: u.organizationId,
+          jobTitle: u.jobTitle,
+          permissions: u.permissions,
+        },
+      ]),
+    );
   }
 
   @Delete('members/:id')
@@ -71,7 +85,12 @@ export class InvitesController {
       throw new ForbiddenException('You cannot remove a member with full owner permissions.');
     }
 
-    await this.usersService.remove(id); // TODO: Change to remove membership
+    // Multi-org: remove access to THIS company only, never the account itself —
+    // the same person may hold real access to other companies (§1.2). Their
+    // Employee HR record for this org (if any) is soft-deactivated alongside it,
+    // so a removed member can't still show up as active in the directory (§1.3).
+    await this.usersService.removeMembership(id, organizationId);
+    await this.employeesService.deactivateForUser(id, organizationId);
     return { ok: true };
   }
 

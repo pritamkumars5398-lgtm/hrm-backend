@@ -52,6 +52,11 @@ model Employee {
   employeeId       String?
   firstName        String
   lastName         String
+  // Self-reference to another Employee.id in the same org — "who does this
+  // person report to." Plain string, not a Prisma relation, matching every
+  // other cross-reference in this schema (organizationId, userId, etc.);
+  // resolved in application code. Nullable: not everyone has a manager.
+  managerId        String?
   contactNumber    String?
   homeAddress      String?
   jobTitle         String
@@ -62,7 +67,10 @@ model Employee {
   financialDetails FinancialDetails?
   educationDetails EducationDetail[]
   familyDetails    FamilyDetail[]
-  createdAt        DateTime @default(now())
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime? @updatedAt
+  // Soft delete (§6): the row is retained, reads filter on `deletedAt: null`.
+  deletedAt        DateTime?
 
   @@unique([userId, organizationId])
   @@index([organizationId])
@@ -102,4 +110,20 @@ model Invite {
   expiresAt      DateTime
 
   @@index([organizationId])
+}
+
+model AttendanceRecord {
+  id             String    @id @map("_id")
+  organizationId String
+  employeeId     String
+  // Plain YYYY-MM-DD, not DateTime — one record per employee per calendar day,
+  // and this sidesteps timezone edge cases when matching "today".
+  date           String
+  checkIn        DateTime?
+  checkOut       DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime? @updatedAt
+
+  @@unique([employeeId, date])
+  @@index([organizationId, date])
 }

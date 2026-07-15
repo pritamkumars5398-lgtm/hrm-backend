@@ -215,8 +215,15 @@ export class UsersService implements OnModuleInit {
     });
   }
 
-  async remove(userId: string): Promise<void> {
-    await this.prisma.user.delete({ where: { id: userId } });
+  /**
+   * Removes a person's access to ONE company only. In a multi-org world,
+   * deleting the `User` (the old behaviour) would kill their login for every
+   * other company they belong to — this deletes just the `Membership` row.
+   */
+  async removeMembership(userId: string, organizationId: string): Promise<void> {
+    await this.prisma.membership.delete({
+      where: { userId_organizationId: { userId, organizationId } },
+    });
   }
 
   private normaliseEmail(email: string): string {

@@ -80,6 +80,20 @@ export class InvitesService {
     let user = await this.usersService.findByEmail(email);
     let tempPassword: string | null = null;
 
+    // A person can legitimately belong to many companies (multi-org, §0) — an
+    // existing account elsewhere is never a reason to refuse. But re-inviting
+    // someone who is ALREADY a member of THIS company is a real conflict, not a
+    // no-op: left unchecked, this created a redundant pending Invite and
+    // returned success without anything meaningful happening membership-wise.
+    if (user) {
+      const alreadyMember = await this.prisma.membership.findFirst({
+        where: { userId: user.id, organizationId: params.organizationId },
+      });
+      if (alreadyMember) {
+        throw new ConflictException('That person is already a member of this company.');
+      }
+    }
+
     if (!user) {
       // 1. Generate temp password
       tempPassword = randomBytes(4).toString('hex'); // 8 char hex
@@ -93,22 +107,16 @@ export class InvitesService {
       });
     }
 
-    // 3. Create Membership
-    const existingMembership = await this.prisma.membership.findFirst({
-      where: { userId: user.id, organizationId: params.organizationId }
+    // 3. Create Membership — the pre-check above guarantees none exists yet.
+    await this.prisma.membership.create({
+      data: {
+        id: `mem-${randomUUID().slice(0, 8)}`,
+        userId: user.id,
+        organizationId: params.organizationId,
+        jobTitle: params.jobTitle || 'Employee',
+        permissions: params.permissions,
+      },
     });
-    
-    if (!existingMembership) {
-      await this.prisma.membership.create({
-        data: {
-          id: `mem-${randomUUID().slice(0, 8)}`,
-          userId: user.id,
-          organizationId: params.organizationId,
-          jobTitle: params.jobTitle || 'Employee',
-          permissions: params.permissions,
-        },
-      });
-    }
 
     // 4. Create Employee record ONLY for the Employee Management entry point.
     //    A Team Members invite is access-control only — User + Membership, no HR
@@ -118,7 +126,26 @@ export class InvitesService {
         where: { userId: user.id, organizationId: params.organizationId }
       });
 
-      if (!existingEmployee) {
+      if (existingEmployee?.deletedAt) {
+        // A soft-deleted record still holds the unique (userId, org) slot, so a
+        // re-add restores and refreshes it rather than failing the create.
+        await this.prisma.employee.update({
+          where: { id: existingEmployee.id },
+          data: {
+            deletedAt: null,
+            employeeId: params.employeeId || existingEmployee.employeeId || '',
+            firstName: params.firstName || existingEmployee.firstName,
+            lastName: params.lastName || existingEmployee.lastName,
+            contactNumber: params.contactNumber ?? existingEmployee.contactNumber,
+            homeAddress: params.homeAddress ?? existingEmployee.homeAddress,
+            jobTitle: params.jobTitle || existingEmployee.jobTitle,
+            department: params.department || existingEmployee.department,
+            startDate: params.startDate ? new Date(params.startDate) : existingEmployee.startDate,
+            employmentType: params.employmentType || existingEmployee.employmentType,
+            workLocation: params.workLocation || existingEmployee.workLocation,
+          },
+        });
+      } else if (!existingEmployee) {
         await this.prisma.employee.create({
           data: {
             id: `emp-${randomUUID().slice(0, 8)}`,

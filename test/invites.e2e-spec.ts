@@ -57,9 +57,14 @@ describe('Team Members / Invites (e2e)', () => {
         .send({ email: `new+${Date.now()}@x.com`, permissions: ['attendance.view'] })
         .expect(201);
 
-      expect(res.body.inviteLink).toContain('/accept-invite?token=');
+      // Temp-password is the credential now, not a token link (Phase 3 §0.2) —
+      // the invite link just points at login.
+      expect(res.body.inviteLink).toContain('/login');
       // The token is a credential — it must not appear on the invite record.
       expect(res.body.invite.token).toBeUndefined();
+      // The temp password is a credential — surfaced once, here, for the
+      // inviter to share. This email is brand new, so a fresh User was created.
+      expect(typeof res.body.tempPassword).toBe('string');
     });
 
     it('lets HR invite', async () => {
@@ -127,8 +132,12 @@ describe('Team Members / Invites (e2e)', () => {
     });
   });
 
-  describe('accepting an invite', () => {
-    it('joins the inviter’s org with the permissions set at invite time', async () => {
+  // The old "click a link, choose your own password" flow (`/invites/preview`,
+  // `/invites/accept`) was removed — temp-password + mandatory reset is the only
+  // credential path now (Phase 3 §0.2). What's left to verify about a pending
+  // invite is its lifecycle: created → resent (new expiry) → revoked (final).
+  describe('invite lifecycle (resend / revoke)', () => {
+    it('creating an invite creates a real User with a temp password and issues a Membership', async () => {
       const email = `joiner+${Date.now()}@x.com`;
 
       const created = await request(server())
@@ -138,77 +147,22 @@ describe('Team Members / Invites (e2e)', () => {
         .send({ email, permissions: ['team.invite'] })
         .expect(201);
 
-      const token = new URL(created.body.inviteLink).searchParams.get('token')!;
+      expect(typeof created.body.tempPassword).toBe('string');
+      expect(created.body.invite.status).toBe('PENDING');
 
-      const preview = await request(server())
-        .get('/invites/preview')
-        .query({ token })
+      // The new account can immediately log in with the temp password.
+      const login = await request(server())
+        .post('/auth/login')
+        .send({ email, password: created.body.tempPassword })
         .expect(200);
 
-      expect(preview.body.email).toBe(email);
-      expect(preview.body.organizationName).toBe('Alderway Labs');
-
-      const accepted = await request(server())
-        .post('/invites/accept')
-        .send({
-          token,
-          fullName: 'Jo Invitee',
-          phone: '+44 7700 900123',
-          jobTitle: 'Recruiter',
-          password: 'hunter2xx',
-        })
-        .expect(200);
-
-      // Role and org come from the invite, not from anything the invitee typed.
-      expect(accepted.body.memberships[0].permissions).toContain('team.invite');
-      expect(accepted.body.memberships[0].organizationId).toBe('org-alderway');
-      expect(accepted.body.email).toBe(email);
-      expect(accepted.body.passwordHash).toBeUndefined();
+      expect(login.body.requiresPasswordReset).toBe(true);
+      expect(login.body.memberships.some((m: { organizationId: string; permissions: string[] }) =>
+        m.organizationId === 'org-alderway' && m.permissions.includes('team.invite'),
+      )).toBe(true);
     });
 
-    it('burns the token — the same link cannot be used twice', async () => {
-      const email = `once+${Date.now()}@x.com`;
-
-      const created = await request(server())
-        .post('/invites')
-        .set('Cookie', ownerCookie)
-        .set('X-Workspace-Id', 'org-alderway')
-        .send({ email, permissions: ['team.invite'] })
-        .expect(201);
-
-      const token = new URL(created.body.inviteLink).searchParams.get('token')!;
-
-      await request(server())
-        .post('/invites/accept')
-        .send({
-          token,
-          fullName: 'First Use',
-          phone: '123456',
-          jobTitle: 'Analyst',
-          password: 'hunter2xx',
-        })
-        .expect(200);
-
-      await request(server())
-        .post('/invites/accept')
-        .send({
-          token,
-          fullName: 'Replay Attack',
-          phone: '123456',
-          jobTitle: 'Analyst',
-          password: 'hunter2xx',
-        })
-        .expect(400);
-    });
-
-    it('rejects a made-up token', async () => {
-      await request(server())
-        .get('/invites/preview')
-        .query({ token: 'totally-made-up' })
-        .expect(404);
-    });
-
-    it('rejects a revoked invite', async () => {
+    it('revoke marks the invite REVOKED and it stays that way', async () => {
       const created = await request(server())
         .post('/invites')
         .set('Cookie', ownerCookie)
@@ -216,18 +170,23 @@ describe('Team Members / Invites (e2e)', () => {
         .send({ email: `revoked+${Date.now()}@x.com`, permissions: ['team.invite'] })
         .expect(201);
 
-      const token = new URL(created.body.inviteLink).searchParams.get('token')!;
-
-      await request(server())
+      const revoked = await request(server())
         .post(`/invites/${created.body.invite.id}/revoke`)
         .set('Cookie', ownerCookie)
         .set('X-Workspace-Id', 'org-alderway')
         .expect(200);
 
-      await request(server()).get('/invites/preview').query({ token }).expect(400);
+      expect(revoked.body.status).toBe('REVOKED');
+
+      // Revoking an already-revoked invite is a no-op-shaped error, not a crash.
+      await request(server())
+        .post(`/invites/${created.body.invite.id}/revoke`)
+        .set('Cookie', ownerCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .expect(200);
     });
 
-    it('resend issues a new token and kills the old link', async () => {
+    it('resend refreshes the invite back to PENDING with a later expiry', async () => {
       const created = await request(server())
         .post('/invites')
         .set('Cookie', ownerCookie)
@@ -235,7 +194,11 @@ describe('Team Members / Invites (e2e)', () => {
         .send({ email: `resend+${Date.now()}@x.com`, permissions: ['team.invite'] })
         .expect(201);
 
-      const oldToken = new URL(created.body.inviteLink).searchParams.get('token')!;
+      await request(server())
+        .post(`/invites/${created.body.invite.id}/revoke`)
+        .set('Cookie', ownerCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .expect(200);
 
       const resent = await request(server())
         .post(`/invites/${created.body.invite.id}/resend`)
@@ -243,11 +206,60 @@ describe('Team Members / Invites (e2e)', () => {
         .set('X-Workspace-Id', 'org-alderway')
         .expect(200);
 
-      const newToken = new URL(resent.body.inviteLink).searchParams.get('token')!;
+      expect(resent.body.invite.status).toBe('PENDING');
+      expect(new Date(resent.body.invite.expiresAt).getTime()).toBeGreaterThan(
+        new Date(created.body.invite.expiresAt).getTime(),
+      );
+    });
+  });
 
-      expect(newToken).not.toBe(oldToken);
-      await request(server()).get('/invites/preview').query({ token: newToken }).expect(200);
-      await request(server()).get('/invites/preview').query({ token: oldToken }).expect(404);
+  // Phase 3 §0.1: an invite from Team Members must never create an Employee HR
+  // record — only Employee Management's "Add Employee" should.
+  describe('source discriminator (§0.1 regression guard)', () => {
+    it('a team-members invite creates no Employee record', async () => {
+      const email = `tm-only+${Date.now()}@x.com`;
+
+      await request(server())
+        .post('/invites')
+        .set('Cookie', ownerCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .send({ email, permissions: ['attendance.view'], source: 'team-members' })
+        .expect(201);
+
+      const employees = await request(server())
+        .get('/employees')
+        .set('Cookie', ownerCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .expect(200);
+
+      expect(employees.body.some((e: { email: string }) => e.email === email)).toBe(false);
+    });
+
+    it('an employee-management invite creates an Employee record', async () => {
+      const email = `em-created+${Date.now()}@x.com`;
+
+      await request(server())
+        .post('/invites')
+        .set('Cookie', ownerCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .send({
+          email,
+          permissions: ['attendance.view'],
+          source: 'employee-management',
+          firstName: 'Em',
+          lastName: 'Created',
+          jobTitle: 'QA',
+          employeeId: `EMP-${Date.now()}`,
+        })
+        .expect(201);
+
+      const employees = await request(server())
+        .get('/employees')
+        .set('Cookie', ownerCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .expect(200);
+
+      expect(employees.body.some((e: { email: string }) => e.email === email)).toBe(true);
     });
   });
 
@@ -262,6 +274,12 @@ describe('Team Members / Invites (e2e)', () => {
       expect(res.body.every((m: { passwordHash?: string }) => m.passwordHash === undefined)).toBe(
         true,
       );
+      // Regression guard: `memberships[0]` used to be the raw user record
+      // (`u as any`), which leaked `passwordHash` one level deeper than the
+      // top-level check above catches. It must be a clean Membership shape.
+      expect(
+        res.body.every((m: { memberships: Array<{ passwordHash?: string }> }) => m.memberships[0].passwordHash === undefined),
+      ).toBe(true);
     });
 
     it('forbids a Manager from removing a member', async () => {
@@ -285,6 +303,168 @@ describe('Team Members / Invites (e2e)', () => {
         .set('Cookie', ownerCookie)
         .set('X-Workspace-Id', 'org-alderway')
         .expect(404);
+    });
+
+    // Phase 3 §1.2/§1.3: removing a member must delete only their Membership +
+    // Employee record for THIS company — never their User account, which would
+    // kill their access to every other company they belong to.
+    it('removing a member keeps their access to a different company (cross-company isolation)', async () => {
+      const email = `multiorg+${Date.now()}@x.com`;
+
+      // Give them access to org-alderway via Employee Management (creates an Employee record too).
+      const invited = await request(server())
+        .post('/invites')
+        .set('Cookie', ownerCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .send({
+          email,
+          permissions: ['attendance.view'],
+          source: 'employee-management',
+          firstName: 'Multi',
+          lastName: 'Org',
+          jobTitle: 'QA',
+          employeeId: `EMP-MO-${Date.now()}`,
+        })
+        .expect(201);
+      const tempPassword = invited.body.tempPassword as string;
+
+      // Owner creates a second company and adds the same person there too.
+      const org2 = await request(server())
+        .post('/organizations')
+        .set('Cookie', ownerCookie)
+        .send({ name: `Second Co ${Date.now()}`, address: '1 Test Street', industry: 'Software & Technology' })
+        .expect(201);
+      const org2Id = org2.body.organization.id;
+
+      await request(server())
+        .post('/invites')
+        .set('Cookie', ownerCookie)
+        .set('X-Workspace-Id', org2Id)
+        .send({ email, permissions: ['attendance.view'], source: 'team-members' })
+        .expect(201);
+
+      // Find their user id via org-alderway's member list.
+      const members = await request(server())
+        .get('/members')
+        .set('Cookie', ownerCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .expect(200);
+      const targetUserId = members.body.find((m: { email: string }) => m.email === email).id;
+
+      // Remove them from org-alderway only.
+      await request(server())
+        .delete(`/members/${targetUserId}`)
+        .set('Cookie', ownerCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .expect(200);
+
+      // Gone from org-alderway's member list...
+      const afterOrg1 = await request(server())
+        .get('/members')
+        .set('Cookie', ownerCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .expect(200);
+      expect(afterOrg1.body.some((m: { email: string }) => m.email === email)).toBe(false);
+
+      // ...and their Employee HR record for org-alderway is retired too.
+      const employeesAfter = await request(server())
+        .get('/employees')
+        .set('Cookie', ownerCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .expect(200);
+      expect(employeesAfter.body.some((e: { email: string }) => e.email === email)).toBe(false);
+
+      // The account itself still exists: their real temp password from the
+      // FIRST invite still logs them in (proves the User row was not deleted —
+      // a wrong-password 401 wouldn't distinguish "account gone" from "bad
+      // password", since the backend intentionally returns the same message
+      // for both, so only a successful login with the real credential proves this).
+      const login = await request(server())
+        .post('/auth/login')
+        .send({ email, password: tempPassword })
+        .expect(200);
+
+      // And their memberships now show only the second company — org-alderway's
+      // Membership is gone, org2's is not.
+      const orgIds = login.body.memberships.map((m: { organizationId: string }) => m.organizationId);
+      expect(orgIds).toContain(org2Id);
+      expect(orgIds).not.toContain('org-alderway');
+    });
+  });
+
+  // Phase 3 §1.4: coverage for the mandatory temp-password reset flow. This
+  // covers the backend contract only — the route-guard redirect itself
+  // (`RequireAuth` bouncing a flagged user off any page but /reset-password)
+  // is frontend router behaviour with no backend request to assert on, so it
+  // is out of scope for this supertest suite; it was verified by reading the
+  // code end to end (Phase 3 §0).
+  describe('mandatory password reset (§1.4)', () => {
+    it('temp-password login flags requiresPasswordReset, a wrong current-password fails cleanly, and a correct reset clears the flag', async () => {
+      const email = `resetflow+${Date.now()}@x.com`;
+
+      const invited = await request(server())
+        .post('/invites')
+        .set('Cookie', ownerCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .send({
+          email,
+          permissions: ['attendance.view'],
+          source: 'employee-management',
+          firstName: 'Reset',
+          lastName: 'Flow',
+          jobTitle: 'QA',
+          employeeId: `EMP-RF-${Date.now()}`,
+        })
+        .expect(201);
+      const tempPassword = invited.body.tempPassword as string;
+
+      // 1. Logging in with the temp password flags the account as needing a reset.
+      const login = await request(server())
+        .post('/auth/login')
+        .send({ email, password: tempPassword })
+        .expect(200);
+      expect(login.body.requiresPasswordReset).toBe(true);
+      const userCookie = authCookie(login);
+
+      // 2. Wrong current-password on the reset attempt fails cleanly (401), and
+      //    the flag is untouched — a failed attempt must not silently clear it.
+      await request(server())
+        .post('/auth/change-password')
+        .set('Cookie', userCookie)
+        .send({ currentPassword: 'totally-wrong', newPassword: 'brand-new-pass-1' })
+        .expect(401);
+
+      const stillFlagged = await request(server())
+        .get('/auth/me')
+        .set('Cookie', userCookie)
+        .expect(200);
+      expect(stillFlagged.body.requiresPasswordReset).toBe(true);
+
+      // 3. The correct current password clears the flag in the DB.
+      await request(server())
+        .post('/auth/change-password')
+        .set('Cookie', userCookie)
+        .send({ currentPassword: tempPassword, newPassword: 'brand-new-pass-1' })
+        .expect(200);
+
+      const afterReset = await request(server())
+        .get('/auth/me')
+        .set('Cookie', userCookie)
+        .expect(200);
+      expect(afterReset.body.requiresPasswordReset).toBe(false);
+
+      // 4. The old temp password no longer works; the new one does, and it too
+      //    now reports requiresPasswordReset: false — navigation is unlocked.
+      await request(server())
+        .post('/auth/login')
+        .send({ email, password: tempPassword })
+        .expect(401);
+
+      const reLogin = await request(server())
+        .post('/auth/login')
+        .send({ email, password: 'brand-new-pass-1' })
+        .expect(200);
+      expect(reLogin.body.requiresPasswordReset).toBe(false);
     });
   });
 });

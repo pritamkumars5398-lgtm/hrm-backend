@@ -29,6 +29,7 @@ export type PublicEmployee = {
   lastName: string;
   employeeId: string;
   homeAddress: string;
+  managerId: string | null;
 };
 
 function initialsOf(first: string, last: string): string {
@@ -44,7 +45,11 @@ function mapEmploymentType(raw: string): PublicEmployee['employmentType'] {
   return 'FULL_TIME';
 }
 
-export function toPublicEmployee(employee: Employee, email: string): PublicEmployee {
+export function toPublicEmployee(
+  employee: Employee,
+  email: string,
+  managerName: string | null = null,
+): PublicEmployee {
   const name = `${employee.firstName} ${employee.lastName}`.trim();
   const joinedAt = employee.startDate.toISOString();
 
@@ -62,7 +67,7 @@ export function toPublicEmployee(employee: Employee, email: string): PublicEmplo
     employmentType: mapEmploymentType(employee.employmentType),
     location: employee.workLocation,
     joinedAt,
-    managerName: null,
+    managerName,
     // One synthesised event so the profile drawer's timeline isn't blank.
     employmentHistory: [
       {
@@ -77,5 +82,6 @@ export function toPublicEmployee(employee: Employee, email: string): PublicEmplo
     lastName: employee.lastName,
     employeeId: employee.employeeId ?? '',
     homeAddress: employee.homeAddress ?? '',
+    managerId: employee.managerId ?? null,
   };
 }

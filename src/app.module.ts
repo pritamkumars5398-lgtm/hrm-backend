@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { AuthModule } from './auth/auth.module';
 import { InvitesModule } from './invites/invites.module';
 import { EmployeesModule } from './employees/employees.module';
+import { AttendanceModule } from './attendance/attendance.module';
 import { OrganizationsModule } from './organizations/organizations.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { UsersModule } from './users/users.module';
@@ -10,10 +11,10 @@ import { HealthController } from './health/health.controller';
 
 /**
  * Modular monolith (§5). Auth, users, organisations and invites are the
- * access-control spine. EmployeesModule is a deliberate, read-only extension:
- * it serves the Employee *identity* records created on invite (§11.4) so the
- * directory shows real people, not mock rows. It exposes NO attendance, payroll
- * or performance data — those remain mock-only until Phase 2 (§11.6).
+ * access-control spine. Employees and Attendance are real HR business modules
+ * built on top of it (Phase 3) — each still scoped by organizationId and
+ * permission-checked server-side. Payroll, Performance, Documents, Reports and
+ * Dashboard remain mock-only until their own turn.
  */
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { HealthController } from './health/health.controller';
     OrganizationsModule,
     InvitesModule,
     EmployeesModule,
+    AttendanceModule,
   ],
   controllers: [HealthController],
 })

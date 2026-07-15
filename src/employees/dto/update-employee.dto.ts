@@ -45,4 +45,10 @@ export class UpdateEmployeeDto {
   @IsString()
   @IsOptional()
   workLocation?: string;
+
+  // Another Employee.id in the same company, or '' / omitted to clear it.
+  // Validated against a real, active, non-self record server-side (service layer).
+  @IsString()
+  @IsOptional()
+  managerId?: string;
 }
