@@ -262,6 +262,7 @@ export class AttendanceService {
         presentToday: today.filter((r) => r.status === 'PRESENT').length,
         lateToday: today.filter((r) => r.status === 'LATE').length,
         absentToday: today.filter((r) => r.status === 'ABSENT').length,
+        leaveToday: today.filter((r) => r.status === 'LEAVE').length,
         avgHours,
       },
       days,

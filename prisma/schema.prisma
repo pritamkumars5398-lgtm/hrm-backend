@@ -1,7 +1,7 @@
-// Phase 1 persists ONLY access-control data: users, organisations, invites.
-// There are deliberately no models for employees, attendance, payroll, leave,
-// performance or reports — that is HR business data and stays mock-only until
-// Phase 2 (CLAUDE.md §11.4).
+// Access-control (users, organisations, invites) plus the real HR business
+// modules built on top of it: employees, attendance, leave, payroll. There are
+// deliberately no models yet for performance, documents or reports — those
+// stay mock-only until their own turn (CLAUDE.md §11.4).
 
 generator client {
   provider = "prisma-client-js"
@@ -104,6 +104,15 @@ model Organization {
   leaveAnnualDays   Int?
   leaveSickDays     Int?
   leavePersonalDays Int?
+
+  // How payday is described to employees — doesn't affect payroll math (§ pay
+  // cycle), purely informational. Null means "not set up yet".
+  payCycleType       String? // FIXED | RANGE
+  // Day-of-month, used when FIXED.
+  payCycleFixedDay   Int?
+  // Day-of-month range, used when RANGE — e.g. 1-7 for "first week".
+  payCycleRangeStart Int?
+  payCycleRangeEnd   Int?
 }
 
 model Invite {
@@ -135,6 +144,71 @@ model AttendanceRecord {
 
   @@unique([employeeId, date])
   @@index([organizationId, date])
+}
+
+model SalaryStructure {
+  id             String   @id @map("_id")
+  organizationId String
+  employeeId     String
+  basic          Float
+  hra            Float    @default(0)
+  otherAllowance Float    @default(0)
+  // The 1st-of-month a raise/revision takes effect from (YYYY-MM-DD) — a salary
+  // change always applies from a whole pay cycle, never mid-month. Revising
+  // creates a new row rather than editing the old one, so a payslip already run
+  // against an earlier structure keeps its own snapshot values and stays correct
+  // even after a later raise.
+  effectiveFrom   String
+  createdAt       DateTime @default(now())
+  createdByUserId String
+
+  @@unique([employeeId, effectiveFrom])
+  @@index([organizationId, employeeId, effectiveFrom])
+}
+
+// Frozen at finalize time — a later salary revision or attendance correction
+// must never change what a finalized payslip already showed someone.
+type PayslipSnapshot {
+  basic           Float
+  hra             Float
+  otherAllowance  Float
+  daysInMonth     Int
+  // Unpaid days: ABSENT (no check-in, no approved leave) and UNPAID-type leave
+  // count as 1, HALF_DAY counts as 0.5. Weekends are never unpaid.
+  unpaidDays      Float
+  lopDeduction    Float
+  grossEarnings   Float
+  totalDeductions Float
+  netSalary       Float
+}
+
+model Payslip {
+  id             String   @id @map("_id")
+  organizationId String
+  employeeId     String
+  // YYYY-MM
+  month          String
+  status         String // DRAFT | FINALIZED
+
+  // Owner-entered, editable only while DRAFT.
+  bonus          Float   @default(0)
+  incentive      Float   @default(0)
+  reimbursement  Float   @default(0)
+  otherEarnings  Float   @default(0)
+  incomeTax      Float   @default(0)
+  otherDeduction Float   @default(0)
+  notes          String?
+
+  // Only set once status = FINALIZED (§ payslip snapshot above).
+  snapshot PayslipSnapshot?
+
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime? @updatedAt
+  finalizedAt        DateTime?
+  finalizedByUserId  String?
+
+  @@unique([employeeId, month])
+  @@index([organizationId, month])
 }
 
 model LeaveRequest {
