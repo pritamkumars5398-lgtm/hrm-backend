@@ -15,8 +15,9 @@ function requireMembership(membership: Membership | undefined): Membership {
 }
 
 /**
- * No `@RequirePermission` — same reasoning as Salary (payroll.manage implies
- * view, checked in the service instead of the declarative guard).
+ * No `@RequirePermission` — `list` is a baseline every member gets, same as
+ * Attendance/Leave: `payroll.view`/`payroll.manage` decide server-side whether
+ * it returns the whole company or just the caller's own finalized payslip.
  */
 @Controller('payroll/payslips')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
@@ -27,9 +28,14 @@ export class PayslipController {
   async list(
     @CurrentMembership() m: Membership | undefined,
     @Query('month') month: string,
+    // Forces the caller's own finalized payslip even if they hold payroll.view/
+    // manage — an Owner is also an employee, and "my payslip" (Payslip nav item)
+    // should behave the same for them as for anyone without payroll access,
+    // distinct from the company-wide Payroll management table.
+    @Query('scope') scope?: string,
   ): Promise<PublicPayslip[]> {
     const membership = requireMembership(m);
-    return this.payslipService.list(membership.organizationId, membership.permissions, month);
+    return this.payslipService.list(membership.organizationId, membership.userId, membership.permissions, month, scope === 'me');
   }
 
   @Post(':employeeId')

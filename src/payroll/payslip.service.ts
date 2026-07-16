@@ -39,12 +39,23 @@ export class PayslipService {
    * One row per employee for the month — active employees, plus anyone (even
    * offboarded since) who already has a saved payslip for it, so a finalized
    * record never disappears just because someone left later.
+   *
+   * Without payroll.view/manage this is self-service: at most one row, for the
+   * caller's own Employee record, and only once it's FINALIZED — a draft is HR
+   * still working the numbers, not something to show the person they're about.
    */
-  async list(organizationId: string, permissions: string[], month: string): Promise<PublicPayslip[]> {
-    if (!canView(permissions)) {
-      throw new ForbiddenException('You do not have permission to view payroll data.');
-    }
+  async list(
+    organizationId: string,
+    userId: string,
+    permissions: string[],
+    month: string,
+    forceSelf = false,
+  ): Promise<PublicPayslip[]> {
     assertValidMonth(month);
+
+    if (forceSelf || !canView(permissions)) {
+      return this.myPayslip(organizationId, userId, month);
+    }
 
     const allEmployees = await this.prisma.employee.findMany({ where: { organizationId } });
     const existingPayslips = await this.prisma.payslip.findMany({ where: { organizationId, month } });
@@ -223,6 +234,18 @@ export class PayslipService {
         });
 
     return this.oneFor(employee, organizationId, month, saved);
+  }
+
+  /** Self-service: the caller's own FINALIZED payslip for the month, or []. */
+  private async myPayslip(organizationId: string, userId: string, month: string): Promise<PublicPayslip[]> {
+    const employees = await this.prisma.employee.findMany({ where: { userId, organizationId } });
+    const employee = employees.find((e) => !e.deletedAt);
+    if (!employee) return [];
+
+    const saved = await this.prisma.payslip.findUnique({ where: { employeeId_month: { employeeId: employee.id, month } } });
+    if (!saved || saved.status !== 'FINALIZED') return [];
+
+    return [await this.oneFor(employee, organizationId, month, saved)];
   }
 
   private async requireEmployeeAnyStatus(id: string, organizationId: string) {
