@@ -9,9 +9,13 @@ import {
   NotFoundException,
   Param,
   Post,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { ConfigService } from '@nestjs/config';
+import { memoryStorage } from 'multer';
 import { InvitesService } from './invites.service';
 import { CreateInviteDto } from './dto/invite.dto';
 import { toPublicInvite, type PublicInvite } from './invite.entity';
@@ -21,6 +25,9 @@ import { JwtAuthGuard } from '../common/jwt-auth.guard';
 import { PermissionsGuard, RequirePermission } from '../common/permissions.guard';
 import { CurrentMembership } from '../common/current-membership.decorator';
 import { toPublicUser, type PublicUser, type Membership } from '../users/user.entity';
+import { uploadEmployeePhoto } from '../common/cloudinary-upload';
+
+const MAX_PHOTO_BYTES = 5 * 1024 * 1024;
 
 @Controller()
 export class InvitesController {
@@ -96,6 +103,33 @@ export class InvitesController {
 
   // ---- Invites (Owner and HR — §10) ---------------------------------------
 
+  /**
+   * The employee photo picked in the Add Employee form. Proxied through this
+   * server (never uploaded straight to Cloudinary from the browser — see
+   * .env.example) so the JWT guard, permission check, and the size/type limits
+   * below all sit in front of it. Same permission as creating the invite
+   * itself: whoever can add this person can also set their photo.
+   */
+  @Post('invites/photo')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission('team.invite')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: MAX_PHOTO_BYTES },
+      fileFilter: (_req, file, cb) => {
+        cb(null, file.mimetype.startsWith('image/'));
+      },
+    }),
+  )
+  async uploadPhoto(@UploadedFile() file?: Express.Multer.File): Promise<{ url: string }> {
+    if (!file) {
+      throw new BadRequestException('Choose an image file under 5MB.');
+    }
+    const url = await uploadEmployeePhoto(this.configService, file.buffer);
+    return { url };
+  }
+
   @Get('invites')
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermission('team.view')
@@ -132,6 +166,7 @@ export class InvitesController {
       employeeId: dto.employeeId,
       contactNumber: dto.contactNumber,
       homeAddress: dto.homeAddress,
+      photoUrl: dto.photoUrl,
       financialDetails: dto.financialDetails,
       educationDetails: dto.educationDetails,
       familyDetails: dto.familyDetails,

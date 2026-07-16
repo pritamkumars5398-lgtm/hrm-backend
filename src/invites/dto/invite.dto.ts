@@ -92,6 +92,12 @@ export class CreateInviteDto {
   @IsOptional()
   homeAddress?: string;
 
+  // Cloudinary secure_url, obtained by the client from the signed direct-upload
+  // flow (GET /invites/photo-signature) before submitting the invite.
+  @IsString()
+  @IsOptional()
+  photoUrl?: string;
+
   @IsOptional()
   @ValidateNested()
   @Type(() => FinancialDetailsDto)

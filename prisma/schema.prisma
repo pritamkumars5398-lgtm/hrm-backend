@@ -59,6 +59,9 @@ model Employee {
   managerId        String?
   contactNumber    String?
   homeAddress      String?
+  // Cloudinary secure_url. Set via the signed direct-upload flow (photo bytes
+  // never pass through this server) — see cloudinary-signature.ts.
+  photoUrl         String?
   jobTitle         String
   department       String
   startDate        DateTime
