@@ -6,6 +6,8 @@ export interface Organization {
   /** The user who created it — its Owner (§11.2). */
   ownerId: string;
   createdAt: Date;
+  /** Where a "someone applied for leave" notification email goes. */
+  leaveNotificationEmail: string | null;
 }
 
 export const INDUSTRIES = [

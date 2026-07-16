@@ -1,4 +1,6 @@
-export type AttendanceStatus = 'PRESENT' | 'LATE' | 'HALF_DAY' | 'ABSENT';
+import type { LeaveType } from '../leave/leave.entity';
+
+export type AttendanceStatus = 'PRESENT' | 'LATE' | 'HALF_DAY' | 'ABSENT' | 'LEAVE';
 
 export type PublicAttendanceRecord = {
   id: string;
@@ -53,6 +55,8 @@ export type PublicAttendanceMonth = {
     checkedOut: boolean;
     checkInTime: string | null;
     checkOutTime: string | null;
+    /** Set when today falls inside one of the caller's own APPROVED leave requests. */
+    onLeave: { type: LeaveType } | null;
   } | null;
 };
 
@@ -82,6 +86,8 @@ export function toPublicRecord(
   record: { id: string; organizationId: string; employeeId: string; date: string; checkIn: Date | null; checkOut: Date | null },
   employee: { firstName: string; lastName: string; department: string },
   managerName: string | null,
+  /** Approved leave covering this exact day, if any — takes priority over "no check-in = absent". */
+  onLeave?: boolean,
 ): PublicAttendanceRecord {
   const name = `${employee.firstName} ${employee.lastName}`.trim();
   const initials = ((employee.firstName[0] ?? '') + (employee.lastName[0] ?? '')).toUpperCase() || '?';
@@ -96,7 +102,7 @@ export function toPublicRecord(
       department: employee.department,
       managerName,
       date: record.date,
-      status: 'ABSENT',
+      status: onLeave ? 'LEAVE' : 'ABSENT',
       clockIn: null,
       clockOut: null,
       hours: 0,

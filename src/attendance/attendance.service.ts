@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, Injectable, NotFoundException }
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { hhmm, toPublicRecord, type DaySummary, type PublicAttendanceMonth } from './attendance.entity';
+import type { LeaveType } from '../leave/leave.entity';
 
 const pad = (n: number) => String(n).padStart(2, '0');
 const isoDate = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -113,6 +114,21 @@ export class AttendanceService {
 
     const recordByKey = new Map(rawRecords.map((r) => [`${r.employeeId}:${r.date}`, r]));
 
+    // Approved leave overlapping this month, expanded to a per-day lookup —
+    // a day covered by approved leave is neither "present" nor "absent".
+    const approvedLeave = employeeIds.length
+      ? await this.prisma.leaveRequest.findMany({
+          where: { organizationId, employeeId: { in: employeeIds }, status: 'APPROVED', startDate: { lte: monthEnd }, endDate: { gte: monthStart } },
+        })
+      : [];
+    const leaveByKey = new Map<string, string>();
+    for (const req of approvedLeave) {
+      for (let d = new Date(`${req.startDate}T00:00:00`); isoDate(d) <= req.endDate; d.setDate(d.getDate() + 1)) {
+        const iso = isoDate(d);
+        if (iso >= monthStart && iso <= monthEnd) leaveByKey.set(`${req.employeeId}:${iso}`, req.type);
+      }
+    }
+
     // The caller's own status for the REAL current day — independent of which
     // month/day the calendar is browsing. `employees` may already be filtered
     // to just the caller (scope 'me'); resolve fresh so this is correct in the
@@ -128,11 +144,26 @@ export class AttendanceService {
         (await this.prisma.attendanceRecord.findUnique({
           where: { employeeId_date: { employeeId: myEmployeeRecord.id, date: todayISO } },
         }));
+
+      // Independent of `leaveByKey` above, which is scoped to the queried
+      // month — today's own leave status must hold regardless of which month
+      // the calendar is currently browsing.
+      const myLeaveToday = await this.prisma.leaveRequest.findFirst({
+        where: {
+          organizationId,
+          employeeId: myEmployeeRecord.id,
+          status: 'APPROVED',
+          startDate: { lte: todayISO },
+          endDate: { gte: todayISO },
+        },
+      });
+
       myTodayStatus = {
         checkedIn: Boolean(myRecord?.checkIn),
         checkedOut: Boolean(myRecord?.checkOut),
         checkInTime: myRecord?.checkIn ? hhmm(myRecord.checkIn) : null,
         checkOutTime: myRecord?.checkOut ? hhmm(myRecord.checkOut) : null,
+        onLeave: myLeaveToday ? { type: myLeaveToday.type as LeaveType } : null,
       };
     }
 
@@ -148,13 +179,14 @@ export class AttendanceService {
 
       for (const employee of employees) {
         // Not yet joined on this date — nothing to record.
-        if (employee.startDate > date) continue;
+        if (isoDate(employee.startDate) > iso) continue;
 
         const raw = recordByKey.get(`${employee.id}:${iso}`);
         const record = toPublicRecord(
           raw ?? { id: `absent-${employee.id}-${iso}`, organizationId, employeeId: employee.id, date: iso, checkIn: null, checkOut: null },
           employee,
           null,
+          leaveByKey.has(`${employee.id}:${iso}`),
         );
 
         const bucket = byDate.get(iso) ?? [];
@@ -163,13 +195,23 @@ export class AttendanceService {
       }
     }
 
-    // Today's own row(s), if any real check-in exists — shown even though the
-    // loop above stops before today, since today is never synthesized as absent.
+    // Today's own row(s) — shown even though the loop above stops before today,
+    // since today is never synthesized as absent. Included if either a real
+    // check-in exists, or today falls inside approved leave (so "who's in
+    // today" correctly shows leave, not silence).
     for (const employee of employees) {
       const raw = recordByKey.get(`${employee.id}:${todayISO}`);
-      if (raw?.checkIn) {
+      const onLeaveToday = leaveByKey.has(`${employee.id}:${todayISO}`);
+      if (raw?.checkIn || onLeaveToday) {
         const bucket = byDate.get(todayISO) ?? [];
-        bucket.push(toPublicRecord(raw, employee, null));
+        bucket.push(
+          toPublicRecord(
+            raw ?? { id: `leave-${employee.id}-${todayISO}`, organizationId, employeeId: employee.id, date: todayISO, checkIn: null, checkOut: null },
+            employee,
+            null,
+            onLeaveToday,
+          ),
+        );
         byDate.set(todayISO, bucket);
       }
     }
@@ -181,7 +223,10 @@ export class AttendanceService {
         const late = rows.filter((r) => r.status === 'LATE').length;
         const halfDay = rows.filter((r) => r.status === 'HALF_DAY').length;
         const absent = rows.filter((r) => r.status === 'ABSENT').length;
-        const expected = rows.length;
+        const leave = rows.filter((r) => r.status === 'LEAVE').length;
+        // Approved leave is excluded from the rate entirely — it isn't a failure
+        // to attend, so it shouldn't drag the heat-map down.
+        const expected = rows.length - leave;
         const attended = present + late + halfDay;
 
         return {
@@ -191,7 +236,7 @@ export class AttendanceService {
           late,
           halfDay,
           absent,
-          leave: 0,
+          leave,
           rate: expected === 0 ? null : attended / expected,
         };
       });

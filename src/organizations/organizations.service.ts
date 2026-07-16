@@ -57,7 +57,7 @@ export class OrganizationsService implements OnModuleInit {
   /** Company profile edits from Settings. Owner-only — enforced at the controller. */
   async update(
     id: string,
-    patch: { name?: string; address?: string; industry?: string },
+    patch: { name?: string; address?: string; industry?: string; leaveNotificationEmail?: string },
   ): Promise<Organization> {
     return (await this.prisma.organization.update({
       where: { id },
@@ -65,6 +65,11 @@ export class OrganizationsService implements OnModuleInit {
         ...(patch.name ? { name: patch.name.trim() } : {}),
         ...(patch.address ? { address: patch.address.trim() } : {}),
         ...(patch.industry ? { industry: patch.industry } : {}),
+        // '' explicitly clears it — only skip the field when it's undefined
+        // (not sent at all), unlike the trim-and-skip-empty fields above.
+        ...(patch.leaveNotificationEmail !== undefined
+          ? { leaveNotificationEmail: patch.leaveNotificationEmail.trim() || null }
+          : {}),
       },
     })) as Organization;
   }

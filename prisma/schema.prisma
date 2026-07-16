@@ -95,6 +95,12 @@ model Organization {
   industry  String
   ownerId   String
   createdAt DateTime @default(now())
+  // Where a "someone applied for leave" email goes. Optional — no address, no email.
+  leaveNotificationEmail String?
+  // Yearly leave entitlement, per type. Null means "use the default" (LEAVE_ENTITLEMENT).
+  leaveAnnualDays   Int?
+  leaveSickDays     Int?
+  leavePersonalDays Int?
 }
 
 model Invite {
@@ -126,4 +132,23 @@ model AttendanceRecord {
 
   @@unique([employeeId, date])
   @@index([organizationId, date])
+}
+
+model LeaveRequest {
+  id              String    @id @map("_id")
+  organizationId  String
+  employeeId      String
+  type            String // ANNUAL | SICK | PERSONAL | UNPAID
+  // Plain YYYY-MM-DD — inclusive range, no time-of-day meaning for a leave day.
+  startDate       String
+  endDate         String
+  days            Int
+  reason          String
+  status          String // PENDING | APPROVED | REJECTED
+  requestedAt     DateTime  @default(now())
+  decidedByUserId String?
+  decidedAt       DateTime?
+
+  @@index([organizationId, employeeId])
+  @@index([organizationId, status])
 }
