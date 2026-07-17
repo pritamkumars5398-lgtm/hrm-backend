@@ -13,6 +13,7 @@ export type PublicEmployee = {
   organizationId: string;
   name: string;
   avatarInitials: string;
+  photoUrl: string | null;
   email: string;
   phone: string;
   department: string;
@@ -58,6 +59,7 @@ export function toPublicEmployee(
     organizationId: employee.organizationId,
     name,
     avatarInitials: initialsOf(employee.firstName, employee.lastName),
+    photoUrl: employee.photoUrl ?? null,
     email,
     phone: employee.contactNumber ?? '',
     department: employee.department,

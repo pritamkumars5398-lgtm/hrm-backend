@@ -64,6 +64,7 @@ export class InvitesService {
     employeeId?: string;
     contactNumber?: string;
     homeAddress?: string;
+    photoUrl?: string;
     financialDetails?: FinancialDetailsInput;
     educationDetails?: EducationDetailInput[];
     familyDetails?: FamilyDetailInput[];
@@ -143,6 +144,7 @@ export class InvitesService {
             startDate: params.startDate ? new Date(params.startDate) : existingEmployee.startDate,
             employmentType: params.employmentType || existingEmployee.employmentType,
             workLocation: params.workLocation || existingEmployee.workLocation,
+            photoUrl: params.photoUrl ?? existingEmployee.photoUrl,
           },
         });
       } else if (!existingEmployee) {
@@ -161,6 +163,7 @@ export class InvitesService {
             startDate: params.startDate ? new Date(params.startDate) : new Date(),
             employmentType: params.employmentType || '',
             workLocation: params.workLocation || '',
+            photoUrl: params.photoUrl || null,
             ...(params.financialDetails ? { financialDetails: params.financialDetails } : {}),
             ...(params.educationDetails?.length ? { educationDetails: params.educationDetails } : {}),
             ...(params.familyDetails?.length ? { familyDetails: params.familyDetails } : {}),

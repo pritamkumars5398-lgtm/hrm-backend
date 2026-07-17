@@ -40,6 +40,7 @@ export type PublicAttendanceMonth = {
     presentToday: number;
     lateToday: number;
     absentToday: number;
+    leaveToday: number;
     avgHours: number;
   };
   days: DaySummary[];
