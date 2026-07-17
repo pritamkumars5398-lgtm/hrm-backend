@@ -1,7 +1,9 @@
-import { ConflictException, Injectable, Logger, type OnModuleInit } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException, type OnModuleInit } from '@nestjs/common';
+import type { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
+import { deleteCompanyDocument } from '../common/cloudinary-upload';
 import type { Organization } from './organization.entity';
 
 /**
@@ -108,5 +110,62 @@ export class OrganizationsService implements OnModuleInit {
     );
 
     return { organization };
+  }
+
+  /**
+   * Permanently deletes a company and every row scoped to it across every
+   * module — a hard delete, by explicit decision (no "restore" concept, no
+   * `deletedAt` filtering to thread through every other service). Only the
+   * Owner (the user who created it, per `ownerId`) may do this, and only if
+   * they belong to at least one other company afterwards — nobody can delete
+   * their way down to zero companies (§10.2's own-company version of this
+   * rule, extended to the account level).
+   */
+  async remove(configService: ConfigService, userId: string, organizationId: string, confirmName: string): Promise<void> {
+    const organization = await this.prisma.organization.findUnique({ where: { id: organizationId } });
+    if (!organization) {
+      throw new NotFoundException('That company no longer exists.');
+    }
+
+    if (organization.ownerId !== userId) {
+      throw new ForbiddenException('Only the Owner who created this company can delete it.');
+    }
+
+    if (organization.name.trim() !== confirmName.trim()) {
+      throw new BadRequestException('The company name you entered does not match.');
+    }
+
+    const totalMemberships = await this.prisma.membership.count({ where: { userId } });
+    if (totalMemberships <= 1) {
+      throw new BadRequestException('You must belong to at least one company — create or join another before deleting this one.');
+    }
+
+    // Clean up real Cloudinary assets first, best-effort — deleteCompanyDocument
+    // already logs (rather than throws) on failure, so one bad asset can't
+    // abort the rest of the teardown (§6, "no orphaned Cloudinary assets").
+    const documents = await this.prisma.document.findMany({ where: { organizationId } });
+    for (const doc of documents) {
+      await deleteCompanyDocument(configService, doc.cloudinaryPublicId, doc.cloudinaryResourceType as 'image' | 'raw');
+    }
+
+    // No `$transaction` — this schema deliberately avoids it everywhere else
+    // too (Mongo transactions need a replica set; a standalone mongod, a
+    // common local/dev setup, would throw and abort the whole deletion).
+    // Leaf data first, Organization last.
+    await Promise.all([
+      this.prisma.review.deleteMany({ where: { organizationId } }),
+      this.prisma.goal.deleteMany({ where: { organizationId } }),
+      this.prisma.appraisalCycle.deleteMany({ where: { organizationId } }),
+      this.prisma.payslip.deleteMany({ where: { organizationId } }),
+      this.prisma.salaryStructure.deleteMany({ where: { organizationId } }),
+      this.prisma.leaveRequest.deleteMany({ where: { organizationId } }),
+      this.prisma.attendanceRecord.deleteMany({ where: { organizationId } }),
+      this.prisma.document.deleteMany({ where: { organizationId } }),
+      this.prisma.invite.deleteMany({ where: { organizationId } }),
+    ]);
+
+    await this.prisma.employee.deleteMany({ where: { organizationId } });
+    await this.prisma.membership.deleteMany({ where: { organizationId } });
+    await this.prisma.organization.delete({ where: { id: organizationId } });
   }
 }

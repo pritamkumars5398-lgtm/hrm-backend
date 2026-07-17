@@ -1,7 +1,7 @@
 // Access-control (users, organisations, invites) plus the real HR business
-// modules built on top of it: employees, attendance, leave, payroll. There are
-// deliberately no models yet for performance, documents or reports — those
-// stay mock-only until their own turn (CLAUDE.md §11.4).
+// modules built on top of it: employees, attendance, leave, payroll,
+// performance, documents. There are deliberately no models yet for reports —
+// that stays mock-only until its own turn (CLAUDE.md §11.4).
 
 generator client {
   provider = "prisma-client-js"
@@ -209,6 +209,74 @@ model Payslip {
 
   @@unique([employeeId, month])
   @@index([organizationId, month])
+}
+
+// One per org at a time in OPEN status — enforced in AppraisalCycle lookup,
+// not a DB constraint (Mongo has no partial-unique-index support in Prisma).
+// Auto-vivified (named after the current calendar quarter) the first time
+// anyone in an org loads Performance — there is no cycle-management UI yet.
+model AppraisalCycle {
+  id             String    @id @map("_id")
+  organizationId String
+  name           String
+  status         String // OPEN | CLOSED
+  startDate      String // YYYY-MM-DD
+  endDate        String
+  createdAt      DateTime  @default(now())
+  closedAt       DateTime?
+
+  @@index([organizationId, status])
+}
+
+model Goal {
+  id             String    @id @map("_id")
+  organizationId String
+  employeeId     String
+  cycleId        String
+  title          String
+  progress       Int       @default(0)
+  dueOn          String
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime? @updatedAt
+
+  @@index([organizationId, employeeId, cycleId])
+}
+
+model Review {
+  id              String   @id @map("_id")
+  organizationId  String
+  employeeId      String
+  cycleId         String
+  rating          Int
+  summary         String
+  reviewerUserId  String
+  createdAt       DateTime @default(now())
+
+  // One review per employee per cycle — matches the frontend's "Pending" vs.
+  // "Reviewed" toggle, which has no concept of re-reviewing within a cycle.
+  @@unique([employeeId, cycleId])
+  @@index([organizationId, cycleId])
+}
+
+model Document {
+  id             String    @id @map("_id")
+  organizationId String
+  name           String
+  description    String
+  category       String // Policies | Templates | Contracts | Compliance | Onboarding
+  fileType       String // PDF | DOCX | XLSX
+  sizeKb         Int
+  cloudinaryPublicId     String
+  // Cloudinary requires the matching resource_type ('image' | 'raw') at
+  // delete time — stored alongside the id rather than re-derived from fileType.
+  cloudinaryResourceType String
+  cloudinaryUrl  String
+  uploadedByUserId String
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime? @updatedAt
+  deletedAt      DateTime?
+
+  @@index([organizationId, category])
 }
 
 model LeaveRequest {
