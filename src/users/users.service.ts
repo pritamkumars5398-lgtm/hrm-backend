@@ -226,6 +226,16 @@ export class UsersService implements OnModuleInit {
     });
   }
 
+  /** Overwrites a membership's granular permission list wholesale — a revision,
+   *  not a merge, matching how the invite form's role preset already works
+   *  (pick a starting point, adjust individual keys, save the whole list). */
+  async updateMembershipPermissions(membershipId: string, permissions: string[]): Promise<void> {
+    await this.prisma.membership.update({
+      where: { id: membershipId },
+      data: { permissions },
+    });
+  }
+
   private normaliseEmail(email: string): string {
     return email.trim().toLowerCase();
   }

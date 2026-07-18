@@ -22,6 +22,10 @@ model User {
   name           String
   avatarInitials String
   createdAt      DateTime @default(now())
+  // FCM registration tokens — one per browser/device the user has registered
+  // push on. A plain array, not a separate model: nothing else ever queries
+  // "which user owns this token" independently of the user itself.
+  fcmTokens      String[] @default([])
 }
 
 type FinancialDetails {
@@ -277,6 +281,29 @@ model Document {
   deletedAt      DateTime?
 
   @@index([organizationId, category])
+}
+
+// Real, persisted in-app notifications — not the mock decorative bell. A
+// notification always belongs to one user (never broadcast-stored; a
+// "everyone with documents.view" event writes one row per recipient), so
+// read/unread state is naturally per-person.
+model Notification {
+  id             String    @id @map("_id")
+  organizationId String
+  userId         String
+  title          String
+  body           String
+  // Mirrors ActivityKind on the Dashboard, plus a couple of Notification-only
+  // kinds (e.g. 'company') — just a string, not a Prisma enum, matching every
+  // other status/type field in this schema.
+  kind           String
+  // Where clicking the notification should take you — a relative frontend
+  // path (e.g. "/dashboard/leave"). Null when there's nowhere meaningful to go.
+  link           String?
+  read           Boolean   @default(false)
+  createdAt      DateTime  @default(now())
+
+  @@index([organizationId, userId, createdAt])
 }
 
 model LeaveRequest {

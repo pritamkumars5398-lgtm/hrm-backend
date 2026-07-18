@@ -10,6 +10,7 @@ import { PerformanceModule } from './performance/performance.module';
 import { DocumentsModule } from './documents/documents.module';
 import { ReportsModule } from './reports/reports.module';
 import { DashboardModule } from './dashboard/dashboard.module';
+import { NotificationsModule } from './notifications/notifications.module';
 import { OrganizationsModule } from './organizations/organizations.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { UsersModule } from './users/users.module';
@@ -37,6 +38,7 @@ import { HealthController } from './health/health.controller';
     DocumentsModule,
     ReportsModule,
     DashboardModule,
+    NotificationsModule,
   ],
   controllers: [HealthController],
 })

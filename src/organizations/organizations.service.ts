@@ -3,6 +3,7 @@ import type { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { deleteCompanyDocument } from '../common/cloudinary-upload';
 import type { Organization } from './organization.entity';
 
@@ -19,6 +20,7 @@ export class OrganizationsService implements OnModuleInit {
   constructor(
     private readonly prisma: PrismaService,
     private readonly usersService: UsersService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   /**
@@ -139,6 +141,16 @@ export class OrganizationsService implements OnModuleInit {
     if (totalMemberships <= 1) {
       throw new BadRequestException('You must belong to at least one company — create or join another before deleting this one.');
     }
+
+    // Push-only, before anything is deleted — a persisted Notification row
+    // would be unreachable the moment this org disappears from everyone's
+    // workspace switcher, so this is the one trigger that skips the DB (§
+    // NotificationsService.pushOnly's own note).
+    const affectedMemberships = await this.prisma.membership.findMany({ where: { organizationId } });
+    await this.notifications.pushOnly(
+      affectedMemberships.map((m) => m.userId),
+      { title: 'Your company was deleted', body: `${organization.name} has been permanently deleted by its Owner.` },
+    );
 
     // Clean up real Cloudinary assets first, best-effort — deleteCompanyDocument
     // already logs (rather than throws) on failure, so one bad asset can't

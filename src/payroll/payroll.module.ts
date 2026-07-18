@@ -6,9 +6,10 @@ import { PayslipService } from './payslip.service';
 import { PayCycleController } from './pay-cycle.controller';
 import { PayCycleService } from './pay-cycle.service';
 import { AuthModule } from '../auth/auth.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
-  imports: [AuthModule],
+  imports: [AuthModule, NotificationsModule],
   controllers: [SalaryController, PayslipController, PayCycleController],
   providers: [SalaryService, PayslipService, PayCycleService],
 })

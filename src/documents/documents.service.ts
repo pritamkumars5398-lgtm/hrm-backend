@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import type { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { deleteCompanyDocument, uploadCompanyDocument } from '../common/cloudinary-upload';
 import { DOCUMENT_CATEGORIES, toPublicDocument, type DocumentCategory, type PublicDocument } from './document.entity';
 import type { UploadDocumentDto } from './dto/upload-document.dto';
@@ -32,9 +33,22 @@ export type DocumentsData = {
   counts: Record<string, number>;
 };
 
+/** Mirrors PermissionsGuard's own matching. */
+function canViewDocuments(permissions: string[]): boolean {
+  return (
+    permissions.includes('*') ||
+    permissions.includes('documents.view') ||
+    permissions.includes('documents.manage') ||
+    permissions.includes('documents.*')
+  );
+}
+
 @Injectable()
 export class DocumentsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notifications: NotificationsService,
+  ) {}
 
   /** Same `deletedAt: null` caveat as Employees — filtered in code, not the query. */
   private async activeDocuments(organizationId: string) {
@@ -103,6 +117,23 @@ export class DocumentsService {
     });
 
     const uploader = await this.prisma.user.findUnique({ where: { id: uploadedByUserId }, select: { name: true } });
+
+    // Broadcast — everyone who can see the Documents module (other than the
+    // uploader themselves) gets one notification row each.
+    const memberships = await this.prisma.membership.findMany({ where: { organizationId } });
+    const recipientIds = memberships
+      .filter((m) => m.userId !== uploadedByUserId && canViewDocuments(m.permissions))
+      .map((m) => m.userId);
+    if (recipientIds.length) {
+      await this.notifications.createForMany(recipientIds, {
+        organizationId,
+        title: 'A new document was uploaded',
+        body: `"${dto.name.trim()}" (${dto.category}) by ${uploader?.name ?? 'someone'}`,
+        kind: 'document',
+        link: '/dashboard/documents',
+      });
+    }
+
     return toPublicDocument(created, uploader?.name ?? 'Unknown');
   }
 

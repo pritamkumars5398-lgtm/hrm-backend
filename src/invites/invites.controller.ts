@@ -8,6 +8,7 @@ import {
   HttpCode,
   NotFoundException,
   Param,
+  Patch,
   Post,
   UploadedFile,
   UseGuards,
@@ -18,6 +19,7 @@ import { ConfigService } from '@nestjs/config';
 import { memoryStorage } from 'multer';
 import { InvitesService } from './invites.service';
 import { CreateInviteDto } from './dto/invite.dto';
+import { UpdateMembershipPermissionsDto } from './dto/update-membership-permissions.dto';
 import { toPublicInvite, type PublicInvite } from './invite.entity';
 import { UsersService } from '../users/users.service';
 import { EmployeesService } from '../employees/employees.service';
@@ -98,6 +100,43 @@ export class InvitesController {
     // so a removed member can't still show up as active in the directory (§1.3).
     await this.usersService.removeMembership(id, organizationId);
     await this.employeesService.deactivateForUser(id, organizationId);
+    return { ok: true };
+  }
+
+  /**
+   * The Permission Editor's save action. The Owner (or anyone else holding
+   * `team.managePermissions`) may set ANY combination of granular keys on
+   * anyone — not tied to the three role presets, which are a convenience for
+   * the invite form only (§10). The one thing this can never do is touch a
+   * membership that already holds `*`: that guard is what keeps a company from
+   * ever being edited down to zero full-access members (§10.2).
+   */
+  @Patch('members/:id/permissions')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission('team.managePermissions')
+  async updatePermissions(
+    @CurrentMembership() membership: Membership,
+    @Param('id') id: string,
+    @Body() dto: UpdateMembershipPermissionsDto,
+  ): Promise<{ ok: true }> {
+    const organizationId = membership.organizationId;
+
+    if (id === membership.userId) {
+      throw new BadRequestException('You cannot edit your own permissions.');
+    }
+
+    const targetMemberships = await this.usersService.getMemberships(id);
+    const targetMem = targetMemberships.find((m) => m.organizationId === organizationId);
+
+    if (!targetMem) {
+      throw new NotFoundException('Member not found in this company.');
+    }
+
+    if (targetMem.permissions.includes('*')) {
+      throw new ForbiddenException('You cannot edit the permissions of a member with full owner access.');
+    }
+
+    await this.usersService.updateMembershipPermissions(targetMem.id, dto.permissions);
     return { ok: true };
   }
 

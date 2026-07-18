@@ -7,6 +7,7 @@ import {
 import { randomBytes, randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import type { Invite } from './invite.entity';
 
 type FinancialDetailsInput = {
@@ -35,6 +36,7 @@ export class InvitesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly usersService: UsersService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   private newToken(): string {
@@ -186,6 +188,16 @@ export class InvitesService {
         expiresAt: this.expiryFrom(now),
       },
     })) as Invite;
+
+    // A brand-new account has no push tokens yet — this still lands as a real
+    // in-app notification waiting for them the moment they log in.
+    await this.notifications.create({
+      userId: user.id,
+      organizationId: params.organizationId,
+      title: params.source === 'employee-management' ? 'You were added as an employee' : 'You were added to the team',
+      body: params.jobTitle ? `Welcome aboard as ${params.jobTitle}.` : 'Welcome aboard.',
+      kind: 'employee',
+    });
 
     return { invite, tempPassword };
   }

@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { quarterFor, type PublicPerformanceData, type PublicPerformanceRecord, type PublicReview } from './performance.entity';
 import type { CreateGoalDto } from './dto/create-goal.dto';
 import type { SubmitReviewDto } from './dto/submit-review.dto';
@@ -12,7 +13,10 @@ function canManage(permissions: string[]): boolean {
 
 @Injectable()
 export class PerformanceService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notifications: NotificationsService,
+  ) {}
 
   /** See Employees' own note: `deletedAt: null` does not match documents where
    *  the field was never written, so soft-deletes are filtered in code. */
@@ -206,6 +210,15 @@ export class PerformanceService {
         reviewerUserId: userId,
       },
     });
+
+    await this.notifications.create({
+      userId: employee.userId,
+      organizationId,
+      title: 'Your performance review is in',
+      body: `${cycle.name} · ${dto.rating}/5`,
+      kind: 'performance',
+      link: '/dashboard/performance',
+    });
   }
 
   async addGoal(
@@ -238,6 +251,15 @@ export class PerformanceService {
         dueOn: dto.dueOn,
         progress: 0,
       },
+    });
+
+    await this.notifications.create({
+      userId: employee.userId,
+      organizationId,
+      title: 'A goal was assigned to you',
+      body: `"${dto.title.trim()}" — due ${dto.dueOn}`,
+      kind: 'performance',
+      link: '/dashboard/performance',
     });
   }
 
@@ -280,6 +302,30 @@ export class PerformanceService {
     }
 
     await this.prisma.goal.update({ where: { id: goalId }, data: { progress } });
+
+    // Only worth telling anyone about when the employee updates their own
+    // progress — a manager/owner editing it is something they just did
+    // themselves, not news to report back to them.
+    if (isOwnGoal) {
+      const managerIds = await this.performanceManagerUserIds(organizationId, userId);
+      if (managerIds.length) {
+        await this.notifications.createForMany(managerIds, {
+          organizationId,
+          title: `${employee.firstName} ${employee.lastName} updated a goal`,
+          body: `"${goal.title}" is now ${progress}% complete`,
+          kind: 'performance',
+          link: '/dashboard/performance',
+        });
+      }
+    }
+  }
+
+  /** Every member (other than the employee themselves) whose permissions grant performance.manage. */
+  private async performanceManagerUserIds(organizationId: string, excludeUserId: string): Promise<string[]> {
+    const memberships = await this.prisma.membership.findMany({ where: { organizationId } });
+    return memberships
+      .filter((m) => m.userId !== excludeUserId && canManage(m.permissions))
+      .map((m) => m.userId);
   }
 
   private async managerNamesFor(
