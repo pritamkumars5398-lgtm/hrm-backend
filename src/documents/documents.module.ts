@@ -1,12 +1,12 @@
 import { Module } from '@nestjs/common';
-import { LeaveController } from './leave.controller';
-import { LeaveService } from './leave.service';
+import { DocumentsController } from './documents.controller';
+import { DocumentsService } from './documents.service';
 import { AuthModule } from '../auth/auth.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [AuthModule, NotificationsModule],
-  controllers: [LeaveController],
-  providers: [LeaveService],
+  controllers: [DocumentsController],
+  providers: [DocumentsService],
 })
-export class LeaveModule {}
+export class DocumentsModule {}

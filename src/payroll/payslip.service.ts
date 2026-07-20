@@ -1,6 +1,7 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { structureForMonth } from './salary.entity';
 import {
   computeAmounts,
@@ -33,7 +34,10 @@ function assertValidMonth(month: string): void {
 
 @Injectable()
 export class PayslipService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notifications: NotificationsService,
+  ) {}
 
   /**
    * One row per employee for the month — active employees, plus anyone (even
@@ -232,6 +236,15 @@ export class PayslipService {
       : await this.prisma.payslip.create({
           data: { id: `pay-${randomUUID().slice(0, 8)}`, organizationId, employeeId, month, ...data },
         });
+
+    await this.notifications.create({
+      userId: employee.userId,
+      organizationId,
+      title: 'Your payslip was finalized',
+      body: `${month} · Net ${new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(amounts.netSalary)}`,
+      kind: 'payroll',
+      link: '/dashboard/payslip',
+    });
 
     return this.oneFor(employee, organizationId, month, saved);
   }

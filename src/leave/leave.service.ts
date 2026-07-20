@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import type { ApplyLeaveDto } from './dto/apply-leave.dto';
 import type { UpdateLeavePolicyDto } from './dto/update-leave-policy.dto';
 import {
@@ -22,7 +23,10 @@ function canApprove(permissions: string[]): boolean {
 
 @Injectable()
 export class LeaveService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notifications: NotificationsService,
+  ) {}
 
   /**
    * `deletedAt: null` in the Mongo `where` clause does NOT match documents where
@@ -194,7 +198,26 @@ export class LeaveService {
       },
     });
 
+    const approverIds = await this.approverUserIds(organizationId, userId);
+    if (approverIds.length) {
+      await this.notifications.createForMany(approverIds, {
+        organizationId,
+        title: 'New leave request awaiting your approval',
+        body: `${me.firstName} ${me.lastName} requested ${days} day${days === 1 ? '' : 's'} ${dto.type.toLowerCase()} leave.`,
+        kind: 'leave',
+        link: '/dashboard/leave',
+      });
+    }
+
     return toPublicRequest(created, me, null);
+  }
+
+  /** Every member (other than the requester) whose permissions grant leave.approve. */
+  private async approverUserIds(organizationId: string, excludeUserId: string): Promise<string[]> {
+    const memberships = await this.prisma.membership.findMany({ where: { organizationId } });
+    return memberships
+      .filter((m) => m.userId !== excludeUserId && canApprove(m.permissions))
+      .map((m) => m.userId);
   }
 
   async decide(
@@ -232,6 +255,16 @@ export class LeaveService {
     }
 
     const decider = await this.prisma.user.findUnique({ where: { id: userId }, select: { name: true } });
+
+    await this.notifications.create({
+      userId: employee.userId,
+      organizationId,
+      title: decision === 'APPROVED' ? 'Your leave was approved' : 'Your leave was rejected',
+      body: `${updated.type.charAt(0)}${updated.type.slice(1).toLowerCase()} leave, ${updated.startDate} to ${updated.endDate}.`,
+      kind: 'leave',
+      link: '/dashboard/leave',
+    });
+
     return toPublicRequest(updated, employee, decider?.name ?? null);
   }
 }

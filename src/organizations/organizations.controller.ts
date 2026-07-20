@@ -2,8 +2,11 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
+  HttpCode,
   NotFoundException,
+  Param,
   Patch,
   Post,
   Res,
@@ -13,6 +16,7 @@ import { ConfigService } from '@nestjs/config';
 import type { Response } from 'express';
 import { OrganizationsService } from './organizations.service';
 import { CreateOrganizationDto, UpdateOrganizationDto } from './dto/create-organization.dto';
+import { DeleteOrganizationDto } from './dto/delete-organization.dto';
 import { INDUSTRIES, type Organization } from './organization.entity';
 import { AuthService } from '../auth/auth.service';
 import { UsersService } from '../users/users.service';
@@ -81,5 +85,25 @@ export class OrganizationsController {
     }
 
     return organization;
+  }
+
+  /**
+   * Permanently deletes a company. Owner-only (checked against the company's
+   * own `ownerId`, not the active workspace) — targets `:id` directly rather
+   * than the active X-Workspace-Id, since the Owner may be deleting a company
+   * other than the one they currently have open (e.g. from the workspace
+   * switcher). No `PermissionsGuard` for that reason; ownership is verified
+   * inside the service instead.
+   */
+  @Delete(':id')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(200)
+  async remove(
+    @CurrentUser() payload: JwtPayload,
+    @Param('id') id: string,
+    @Body() dto: DeleteOrganizationDto,
+  ): Promise<{ ok: true }> {
+    await this.organizationsService.remove(this.configService, payload.sub, id, dto.confirmName);
+    return { ok: true };
   }
 }
