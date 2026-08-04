@@ -20,6 +20,7 @@ export type PublicDocument = {
   updatedAt: string;
   updatedBy: string;
   cloudinaryUrl: string;
+  uploadedByUserId: string;
 };
 
 export function toPublicDocument(doc: DocumentModel, uploadedByName: string): PublicDocument {
@@ -34,5 +35,6 @@ export function toPublicDocument(doc: DocumentModel, uploadedByName: string): Pu
     updatedAt: (doc.updatedAt ?? doc.createdAt).toISOString().slice(0, 10),
     updatedBy: uploadedByName,
     cloudinaryUrl: doc.cloudinaryUrl,
+    uploadedByUserId: doc.uploadedByUserId,
   };
 }

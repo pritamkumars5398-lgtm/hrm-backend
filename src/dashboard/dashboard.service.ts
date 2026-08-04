@@ -48,7 +48,7 @@ export class DashboardService {
    */
   async get(organizationId: string, userId: string, permissions: string[]): Promise<DashboardData> {
     const [stats, activity, weeklyAttendance, leave] = await Promise.all([
-      this.buildStats(organizationId, permissions),
+      this.buildStats(organizationId, userId, permissions),
       this.buildActivity(organizationId, userId, permissions),
       this.buildWeeklyAttendance(organizationId, permissions),
       this.buildLeaveOverview(organizationId, permissions),
@@ -143,13 +143,16 @@ export class DashboardService {
     return { leaveBreakdown, pendingLeaveCount, upcomingLeave };
   }
 
-  private async buildStats(organizationId: string, permissions: string[]): Promise<DashboardStat[]> {
+  private async buildStats(organizationId: string, userId: string, permissions: string[]): Promise<DashboardStat[]> {
     const stats: DashboardStat[] = [];
     const now = new Date();
     const todayISO = isoDate(now);
     const monthStart = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-01`;
+    const yearStart = `${now.getFullYear()}-01-01`;
 
-    if (grants(permissions, 'employees.view', 'employees.manage')) {
+    const hasCompanyStatsPerm = grants(permissions, 'employees.view', 'employees.manage');
+
+    if (hasCompanyStatsPerm) {
       const all = await this.prisma.employee.findMany({ where: { organizationId }, select: { deletedAt: true, startDate: true } });
       const active = all.filter((e) => !e.deletedAt);
       const newThisMonth = active.filter((e) => isoDate(e.startDate) >= monthStart).length;
@@ -219,6 +222,62 @@ export class DashboardService {
         value: reviews.length === 0 ? '—' : `${avg.toFixed(1)} / 5`,
         delta: activeIds.length > 0 ? `${reviews.length} of ${activeIds.length} reviewed` : null,
       });
+    }
+
+    // If they don't have company-wide employee viewing permissions, show self-scoped stats!
+    if (!hasCompanyStatsPerm) {
+      const me = await this.myEmployee(userId, organizationId);
+      if (me) {
+        // 1. My Attendance (Presents this month)
+        const myAttendanceCount = await this.prisma.attendanceRecord.count({
+          where: { employeeId: me.id, date: { gte: monthStart }, checkIn: { not: null } },
+        });
+        stats.push({
+          id: 'st-present', // Re-use ID so style/color matches "Present" card (emerald)
+          label: 'My Present Days (Month)',
+          value: `${myAttendanceCount} days`,
+          delta: null,
+        });
+
+        // 2. My Leaves (Leaves approved this year)
+        const myLeaves = await this.prisma.leaveRequest.findMany({
+          where: { employeeId: me.id, status: 'APPROVED', startDate: { gte: yearStart } },
+        });
+        const myLeaveDays = myLeaves.reduce((sum, r) => sum + r.days, 0);
+        stats.push({
+          id: 'st-leave', // Re-use ID so style/color matches "On leave" card (orange)
+          label: 'My Approved Leaves',
+          value: `${myLeaveDays} days`,
+          delta: null,
+        });
+
+        // 3. My Payslips (Net salary from latest finalized payslip)
+        const lastPayslip = await this.prisma.payslip.findFirst({
+          where: { employeeId: me.id, status: 'FINALIZED' },
+          orderBy: { finalizedAt: 'desc' },
+        });
+        const netSalary = lastPayslip?.snapshot?.netSalary ?? 0;
+        stats.push({
+          id: 'st-payroll', // Re-use ID so style/color matches "payroll" card (indigo)
+          label: 'My Last Net Salary',
+          value: netSalary > 0
+            ? new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(netSalary)
+            : '—',
+          delta: lastPayslip ? lastPayslip.month : null,
+        });
+
+        // 4. My Performance (Latest rating)
+        const lastReview = await this.prisma.review.findFirst({
+          where: { employeeId: me.id },
+          orderBy: { createdAt: 'desc' },
+        });
+        stats.push({
+          id: 'st-performance', // Re-use ID so style/color matches "performance" card (purple)
+          label: 'My Last Rating',
+          value: lastReview ? `${lastReview.rating} / 5` : '—',
+          delta: lastReview ? 'Appraised' : null,
+        });
+      }
     }
 
     return stats;

@@ -7,6 +7,13 @@ import type { UpdateEmployeeDto } from './dto/update-employee.dto';
 export class EmployeesService {
   constructor(private readonly prisma: PrismaService) {}
 
+  async findSelf(userId: string, organizationId: string) {
+    const all = await this.prisma.employee.findMany({
+      where: { userId, organizationId },
+    });
+    return all.find((e) => !e.deletedAt) || null;
+  }
+
   /** Every employee record in one company. Never crosses org boundaries (§1). */
   async findByOrganization(organizationId: string): Promise<PublicEmployee[]> {
     const all = await this.prisma.employee.findMany({
@@ -28,6 +35,35 @@ export class EmployeesService {
     );
   }
 
+  async findFormer(organizationId: string): Promise<PublicEmployee[]> {
+    const all = await this.prisma.employee.findMany({
+      where: { organizationId },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    const FORMER_STATUSES = ['INACTIVE', 'NOTICE'];
+    // Include: soft-deleted OR status is INACTIVE/NOTICE
+    const former = all.filter(
+      (e) => e.deletedAt || FORMER_STATUSES.includes(e.status ?? ''),
+    );
+
+    const emailById = await this.emailsFor(former.map((e) => e.userId));
+    const managerNameById = await this.managerNamesFor(former);
+
+    return former.map((e) => {
+      const employee = toPublicEmployee(e, emailById.get(e.userId) ?? '', managerNameById.get(e.id) ?? null);
+      if (e.deletedAt) {
+        // Mark as deleted so the frontend can show a distinct "Record Deleted" badge
+        return {
+          ...employee,
+          status: (FORMER_STATUSES.includes(e.status ?? '') ? e.status : 'INACTIVE') as any,
+          isDeleted: true,
+        };
+      }
+      return employee;
+    });
+  }
+
   async findOne(id: string, organizationId: string): Promise<PublicEmployee> {
     const employee = await this.prisma.employee.findUnique({ where: { id } });
 
@@ -39,7 +75,24 @@ export class EmployeesService {
 
     const emailById = await this.emailsFor([employee.userId]);
     const managerNameById = await this.managerNamesFor([employee]);
-    return toPublicEmployee(employee, emailById.get(employee.userId) ?? '', managerNameById.get(employee.id) ?? null);
+
+    const allDocs = await this.prisma.document.findMany({
+      where: { organizationId, uploadedByUserId: employee.userId },
+    });
+    const docs = allDocs.filter((d) => !d.deletedAt);
+
+    const publicEmployee = toPublicEmployee(employee, emailById.get(employee.userId) ?? '', managerNameById.get(employee.id) ?? null);
+    publicEmployee.documents = docs.map((d) => ({
+      id: d.id,
+      name: d.name,
+      category: d.category,
+      uploadedAt: (d.updatedAt ?? d.createdAt).toISOString().slice(0, 10),
+      sizeKb: d.sizeKb,
+      fileType: d.fileType,
+      description: d.description,
+      cloudinaryUrl: d.cloudinaryUrl,
+    }));
+    return publicEmployee;
   }
 
   /** Edits an HR record. Org-scoped: you can only touch your own company's people. */
@@ -62,6 +115,7 @@ export class EmployeesService {
     if (patch.employmentType !== undefined) data.employmentType = patch.employmentType;
     if (patch.workLocation !== undefined) data.workLocation = patch.workLocation;
     if (patch.startDate) data.startDate = new Date(patch.startDate);
+    if (patch.status !== undefined) data.status = patch.status;
     if (patch.managerId !== undefined) {
       // A manager must be a real, active employee in the same company — and
       // nobody can be their own manager.
@@ -81,7 +135,24 @@ export class EmployeesService {
 
     const emailById = await this.emailsFor([updated.userId]);
     const managerNameById = await this.managerNamesFor([updated]);
-    return toPublicEmployee(updated, emailById.get(updated.userId) ?? '', managerNameById.get(updated.id) ?? null);
+
+    const allDocs = await this.prisma.document.findMany({
+      where: { organizationId, uploadedByUserId: updated.userId },
+    });
+    const docs = allDocs.filter((d) => !d.deletedAt);
+
+    const publicEmployee = toPublicEmployee(updated, emailById.get(updated.userId) ?? '', managerNameById.get(updated.id) ?? null);
+    publicEmployee.documents = docs.map((d) => ({
+      id: d.id,
+      name: d.name,
+      category: d.category,
+      uploadedAt: (d.updatedAt ?? d.createdAt).toISOString().slice(0, 10),
+      sizeKb: d.sizeKb,
+      fileType: d.fileType,
+      description: d.description,
+      cloudinaryUrl: d.cloudinaryUrl,
+    }));
+    return publicEmployee;
   }
 
   /**

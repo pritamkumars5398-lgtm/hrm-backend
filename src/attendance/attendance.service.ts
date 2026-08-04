@@ -88,8 +88,9 @@ export class AttendanceService {
     year: number;
     month: number; // 0-indexed, matching JS Date
     selectedDate?: string;
+    employeeId?: string;
   }): Promise<PublicAttendanceMonth> {
-    const { organizationId, year, month } = params;
+    const { organizationId, year, month, employeeId } = params;
     const manage = canManage(params.permissions);
 
     const allEmployees = await this.prisma.employee.findMany({
@@ -97,7 +98,9 @@ export class AttendanceService {
     });
     let employees = allEmployees.filter((e) => !e.deletedAt);
 
-    if (!manage) {
+    if (employeeId && manage) {
+      employees = employees.filter((e) => e.id === employeeId);
+    } else if (!manage) {
       employees = employees.filter((e) => e.userId === params.userId);
     }
 

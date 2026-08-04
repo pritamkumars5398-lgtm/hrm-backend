@@ -50,6 +50,7 @@ export class AttendanceController {
     @Query('year') year: string,
     @Query('month') month: string,
     @Query('selectedDate') selectedDate?: string,
+    @Query('employeeId') employeeId?: string,
   ): Promise<PublicAttendanceMonth> {
     const membership = requireMembership(m);
     return this.attendanceService.getMonth({
@@ -59,6 +60,7 @@ export class AttendanceController {
       year: Number(year),
       month: Number(month),
       selectedDate,
+      employeeId,
     });
   }
 }

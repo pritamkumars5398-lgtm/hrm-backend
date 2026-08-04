@@ -56,7 +56,7 @@ export class DocumentsController {
   }
 
   @Post()
-  @RequirePermission('documents.manage')
+  @RequirePermission('documents.view')
   @UseInterceptors(
     FileInterceptor('file', {
       storage: memoryStorage(),
@@ -79,13 +79,13 @@ export class DocumentsController {
   }
 
   @Delete(':id')
-  @RequirePermission('documents.manage')
+  @RequirePermission('documents.view')
   @HttpCode(200)
   async remove(
     @CurrentMembership() membership: Membership,
     @Param('id') id: string,
   ): Promise<{ ok: true }> {
-    await this.documentsService.remove(this.configService, id, membership.organizationId);
+    await this.documentsService.remove(this.configService, id, membership.organizationId, membership.userId, membership.permissions);
     return { ok: true };
   }
 }

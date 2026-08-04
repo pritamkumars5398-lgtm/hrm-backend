@@ -74,6 +74,7 @@ model Employee {
   financialDetails FinancialDetails?
   educationDetails EducationDetail[]
   familyDetails    FamilyDetail[]
+  status           String?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime? @updatedAt
   // Soft delete (§6): the row is retained, reads filter on `deletedAt: null`.

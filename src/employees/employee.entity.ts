@@ -24,13 +24,24 @@ export type PublicEmployee = {
   joinedAt: string;
   managerName: string | null;
   employmentHistory: Array<{ id: string; date: string; title: string; detail: string }>;
-  documents: Array<{ id: string; name: string; category: string; uploadedAt: string; sizeKb: number }>;
+  documents: Array<{
+    id: string;
+    name: string;
+    category: string;
+    uploadedAt: string;
+    sizeKb: number;
+    fileType?: string;
+    description?: string;
+    cloudinaryUrl?: string;
+  }>;
   // Raw stored fields, so the edit form can populate real values (name is display-only).
   firstName: string;
   lastName: string;
   employeeId: string;
   homeAddress: string;
   managerId: string | null;
+  /** True when the record was soft-deleted — Former Employees page uses this for display. */
+  isDeleted?: boolean;
 };
 
 function initialsOf(first: string, last: string): string {
@@ -64,8 +75,7 @@ export function toPublicEmployee(
     phone: employee.contactNumber ?? '',
     department: employee.department,
     designation: employee.jobTitle,
-    // No lifecycle tracking yet — everyone added through the invite flow is active.
-    status: 'ACTIVE',
+    status: (employee.status as any) ?? 'ACTIVE',
     employmentType: mapEmploymentType(employee.employmentType),
     location: employee.workLocation,
     joinedAt,

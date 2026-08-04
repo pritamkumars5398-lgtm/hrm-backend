@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
@@ -137,10 +137,22 @@ export class DocumentsService {
     return toPublicDocument(created, uploader?.name ?? 'Unknown');
   }
 
-  async remove(configService: ConfigService, id: string, organizationId: string): Promise<void> {
+  async remove(
+    configService: ConfigService,
+    id: string,
+    organizationId: string,
+    userId: string,
+    permissions: string[],
+  ): Promise<void> {
     const existing = await this.prisma.document.findUnique({ where: { id } });
     if (!existing || existing.organizationId !== organizationId || existing.deletedAt) {
       throw new NotFoundException('That document no longer exists.');
+    }
+
+    const canManage = permissions.includes('*') || permissions.includes('documents.manage') || permissions.includes('documents.*');
+    const isUploader = existing.uploadedByUserId === userId;
+    if (!canManage && !isUploader) {
+      throw new ForbiddenException("You do not have permission to delete this document.");
     }
 
     await deleteCompanyDocument(configService, existing.cloudinaryPublicId, existing.cloudinaryResourceType as 'image' | 'raw');
