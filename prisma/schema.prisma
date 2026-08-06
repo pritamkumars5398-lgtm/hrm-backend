@@ -324,3 +324,129 @@ model LeaveRequest {
   @@index([organizationId, employeeId])
   @@index([organizationId, status])
 }
+
+model JobRequisition {
+  id             String   @id @map("_id")
+  organizationId String
+  title          String
+  department     String
+  location       String
+  headcount      Int
+  status         String // DRAFT | OPEN | CLOSED
+  description    String?
+  createdAt      DateTime @default(now())
+}
+
+model Candidate {
+  id             String   @id @map("_id")
+  organizationId String
+  requisitionId  String
+  name           String
+  email          String
+  phone          String?
+  stage          String // APPLIED | SCREENED | INTERVIEW | OFFERED | HIRED | REJECTED
+  aiScore        Int?     @default(0)
+  resumeUrl      String?
+  createdAt      DateTime @default(now())
+}
+
+model Timesheet {
+  id             String   @id @map("_id")
+  organizationId String
+  employeeId     String
+  weekStartDate  String // YYYY-MM-DD
+  status         String // DRAFT | SUBMITTED | APPROVED | REJECTED
+  totalHours     Float    @default(0)
+  createdAt      DateTime @default(now())
+}
+
+model Asset {
+  id             String   @id @map("_id")
+  organizationId String
+  name           String
+  assetTag       String
+  category       String // Laptop | Desktop | Mobile | SIM | Accessory
+  status         String // AVAILABLE | ASSIGNED | REPAIR | RETIRED
+  assignedToId   String?
+  serialNumber   String?
+  createdAt      DateTime @default(now())
+}
+
+model ExpenseClaim {
+  id             String   @id @map("_id")
+  organizationId String
+  employeeId     String
+  title          String
+  category       String // Travel | Food | Fuel | Hotel | Miscellaneous
+  amount         Float
+  status         String // PENDING | APPROVED | REJECTED | REIMBURSED
+  receiptUrl     String?
+  createdAt      DateTime @default(now())
+}
+
+model TravelRequest {
+  id             String   @id @map("_id")
+  organizationId String
+  employeeId     String
+  destination    String
+  startDate      String
+  endDate        String
+  purpose        String
+  estimatedCost  Float
+  status         String // PENDING | APPROVED | BOOKED | REJECTED
+  createdAt      DateTime @default(now())
+}
+
+model HelpdeskTicket {
+  id             String   @id @map("_id")
+  organizationId String
+  employeeId     String
+  subject        String
+  category       String // HR | IT | Finance | Admin
+  priority       String // LOW | MEDIUM | HIGH | URGENT
+  status         String // OPEN | IN_PROGRESS | RESOLVED | CLOSED
+  assignedToId   String?
+  createdAt      DateTime @default(now())
+}
+
+model Course {
+  id             String   @id @map("_id")
+  organizationId String
+  title          String
+  category       String
+  durationMins   Int
+  description    String?
+  createdAt      DateTime @default(now())
+}
+
+model FeedPost {
+  id             String   @id @map("_id")
+  organizationId String
+  authorId       String
+  authorName     String
+  content        String
+  type           String // ANNOUNCEMENT | KUDOS | EVENT | GENERAL
+  likes          Int      @default(0)
+  createdAt      DateTime @default(now())
+}
+
+model FormDefinition {
+  id             String   @id @map("_id")
+  organizationId String
+  title          String
+  description    String?
+  category       String // Appraisal | Survey | Feedback | Onboarding
+  fieldsJson     String   // JSON string of fields
+  status         String // DRAFT | PUBLISHED
+  createdAt      DateTime @default(now())
+}
+
+model Tenant {
+  id             String   @id @map("_id")
+  name           String
+  domain         String   @unique
+  plan           String // STARTER | PROFESSIONAL | ENTERPRISE
+  status         String // ACTIVE | TRIAL | SUSPENDED
+  createdAt      DateTime @default(now())
+}
+
