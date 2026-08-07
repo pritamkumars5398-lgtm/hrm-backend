@@ -450,3 +450,17 @@ model Tenant {
   createdAt      DateTime @default(now())
 }
 
+model AuditLog {
+  id             String   @id @map("_id")
+  organizationId String?
+  userId         String
+  userEmail      String
+  action         String   // READ, CREATE, UPDATE, DELETE, DECIDE
+  resource       String   // Employee, LeaveRequest, Payslip, FormDefinition, Organization, Invite
+  resourceId     String?
+  result         String   // ALLOW | DENY
+  details        String?
+  timestamp      DateTime @default(now())
+}
+
+

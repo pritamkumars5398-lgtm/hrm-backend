@@ -5,9 +5,11 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { randomBytes, randomUUID } from 'node:crypto';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { EmailService } from '../common/email.service';
 import type { Invite } from './invite.entity';
 
 type FinancialDetailsInput = {
@@ -37,7 +39,16 @@ export class InvitesService {
     private readonly prisma: PrismaService,
     private readonly usersService: UsersService,
     private readonly notifications: NotificationsService,
+    private readonly emailService: EmailService,
+    private readonly configService: ConfigService,
   ) {}
+
+  private linkFor(token: string): string {
+    const origin = (this.configService.get<string>('CORS_ORIGINS') ?? 'http://localhost:5173')
+      .split(',')[0]
+      .trim();
+    return `${origin}/login`;
+  }
 
   private newToken(): string {
     // 32 bytes of entropy — this token is the credential that grants access to
@@ -199,6 +210,10 @@ export class InvitesService {
       kind: 'employee',
     });
 
+    // 6. Send invite email
+    const nameFallback = params.firstName ? `${params.firstName} ${params.lastName || ''}`.trim() : user.name;
+    void this.emailService.sendInvite(email, nameFallback, this.linkFor(invite.token), tempPassword);
+
     return { invite, tempPassword };
   }
 
@@ -242,7 +257,7 @@ export class InvitesService {
 
     const now = new Date();
 
-    return (await this.prisma.invite.update({
+    const updated = (await this.prisma.invite.update({
       where: { id },
       data: {
         status: 'PENDING',
@@ -251,5 +266,10 @@ export class InvitesService {
         expiresAt: this.expiryFrom(now),
       },
     })) as Invite;
+
+    // Send invite email (tempPassword is null for resends)
+    void this.emailService.sendInvite(updated.email, updated.email.split('@')[0], this.linkFor(updated.token), null);
+
+    return updated;
   }
 }
