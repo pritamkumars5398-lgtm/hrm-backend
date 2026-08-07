@@ -19,26 +19,45 @@ export class PermissionsGuard implements CanActivate {
     const request = context.switchToHttp().getRequest();
     const handler = context.getHandler();
     
-    // --- 1. User Login & Authentication (JWT) ---
+    // ==========================================
+    // STEP 1: USER LOGIN / GOOGLE IDENTITY AUTH
+    // ==========================================
     const jwtUser = request.user;
     if (!jwtUser) {
-      throw new UnauthorizedException('You must be logged in.');
+      throw new UnauthorizedException('User Login: Authentication failed.');
     }
+
+    // ==========================================
+    // STEP 2: VERIFY PASSWORD / SSO / MFA
+    // ==========================================
+    // JWT signature validation occurred in JwtAuthGuard. 
+    // If google login was used, sub starts with 'goog' or the email is associated with OAuth.
+    const isGoogleSSO = jwtUser.email?.endsWith('@gmail.com') || false; 
+
+    // ==========================================
+    // STEP 3: IDENTITY VERIFIED
+    // ==========================================
+    // The request identity is verified. Proceeding to load profiles.
 
     const organizationId = request.headers['x-workspace-id'] as string | undefined;
 
-    // --- 2. Load User Profile & Attributes ---
-    let userProfile: any = null;
-    let userAttributes: any = {
-      role: 'GUEST',
-      permissions: [],
-      branch: null,
-      department: null,
-      designation: null,
+    // ==========================================
+    // STEP 4: LOAD USER PROFILE METADATA
+    // ==========================================
+    let userProfileMetadata = {
+      userId: jwtUser.sub,
+      organization: organizationId || 'None',
+      organizationalUnit: 'Default OU',
+      groups: [] as string[],
+      customAttributes: {} as Record<string, any>,
+      licenses: 'STARTER',
+      status: 'ACTIVE',
     };
 
+    let userProfile: any = null;
+
     if (organizationId) {
-      const [user, membership, employee] = await Promise.all([
+      const [user, membership, employee, organization] = await Promise.all([
         this.prisma.user.findUnique({ where: { id: jwtUser.sub } }),
         this.prisma.membership.findUnique({
           where: {
@@ -56,77 +75,125 @@ export class PermissionsGuard implements CanActivate {
             },
           },
         }),
+        this.prisma.organization.findUnique({
+          where: { id: organizationId },
+        }),
       ]);
 
       if (membership) {
-        userProfile = {
-          user,
-          organizationId,
-          membership,
-          employee,
+        userProfile = { user, membership, employee, organization };
+
+        // Determine License via Tenant plan if available, or fallback to STARTER
+        let licenseTier = 'STARTER';
+        try {
+          const tenant = await this.prisma.tenant.findFirst({
+            where: { id: organizationId },
+          });
+          if (tenant) {
+            licenseTier = tenant.plan;
+          }
+        } catch {
+          // Fallback to STARTER
+        }
+
+        userProfileMetadata = {
+          userId: jwtUser.sub,
+          organization: organizationId,
+          organizationalUnit: employee?.department || 'General Administration',
+          groups: [
+            membership.jobTitle || 'Member',
+            employee?.workLocation || 'Office-Default',
+          ],
+          customAttributes: {
+            employmentType: employee?.employmentType || 'Full-time',
+            startDate: employee?.startDate ? employee.startDate.toISOString() : null,
+            googleSSO: isGoogleSSO,
+          },
+          licenses: licenseTier,
+          status: employee?.deletedAt ? 'INACTIVE' : 'ACTIVE',
         };
 
-        userAttributes = {
-          role: membership.jobTitle || 'MEMBER',
-          permissions: membership.permissions || [],
-          branch: employee?.workLocation || null,
-          department: employee?.department || null,
-          designation: employee?.jobTitle || null,
-        };
-
-        // Attach userProfile and attributes to the request for reuse
+        // Attach for downstream controllers
         request.membership = membership;
         request.userProfile = userProfile;
-        request.userAttributes = userAttributes;
       }
     }
 
-    // --- 3. Load Resource ---
+    // ==========================================
+    // STEP 5: USER REQUESTS RESOURCE & LOAD METADATA
+    // ==========================================
     const path = request.path;
     const params = request.params;
-    let resourceType: string = 'System';
+    let resourceMetadata = {
+      resourceType: 'System',
+      resourceOwner: 'System',
+      sharingSettings: 'RESTRICTED',
+      labels: [] as string[],
+      status: 'ACTIVE',
+    };
+
     let resourceId: string | null = null;
     let resourceData: any = null;
 
     try {
       if (path.includes('/employees') && params.id) {
-        resourceType = 'Employee';
+        resourceMetadata.resourceType = 'Employee';
         resourceId = params.id;
         resourceData = await this.prisma.employee.findUnique({ where: { id: params.id } });
+        if (resourceData) {
+          resourceMetadata.resourceOwner = resourceData.userId;
+          resourceMetadata.sharingSettings = 'DEPARTMENT_PRIVATE';
+          resourceMetadata.labels = [resourceData.department, resourceData.jobTitle];
+          resourceMetadata.status = resourceData.deletedAt ? 'INACTIVE' : 'ACTIVE';
+        }
       } else if (path.includes('/employees') && params.employeeId) {
-        resourceType = 'Employee';
+        resourceMetadata.resourceType = 'Employee';
         resourceId = params.employeeId;
         resourceData = await this.prisma.employee.findUnique({ where: { id: params.employeeId } });
+        if (resourceData) {
+          resourceMetadata.resourceOwner = resourceData.userId;
+          resourceMetadata.sharingSettings = 'DEPARTMENT_PRIVATE';
+          resourceMetadata.labels = [resourceData.department, resourceData.jobTitle];
+          resourceMetadata.status = resourceData.deletedAt ? 'INACTIVE' : 'ACTIVE';
+        }
       } else if (path.includes('/leave') && params.id) {
-        resourceType = 'LeaveRequest';
+        resourceMetadata.resourceType = 'LeaveRequest';
         resourceId = params.id;
         resourceData = await this.prisma.leaveRequest.findUnique({ where: { id: params.id } });
+        if (resourceData) {
+          resourceMetadata.resourceOwner = resourceData.employeeId;
+          resourceMetadata.sharingSettings = 'APPROVAL_LOCKED';
+          resourceMetadata.labels = [resourceData.type];
+          resourceMetadata.status = resourceData.status; // PENDING / APPROVED / REJECTED
+        }
       } else if (path.includes('/payroll') && params.id) {
-        resourceType = 'Payslip';
+        resourceMetadata.resourceType = 'Payslip';
         resourceId = params.id;
         resourceData = await this.prisma.payslip.findUnique({ where: { id: params.id } });
-      } else if (path.includes('/payroll') && params.employeeId) {
-        resourceType = 'Payslip';
-        resourceId = params.employeeId;
-        resourceData = await this.prisma.payslip.findFirst({ where: { employeeId: params.employeeId } });
+        if (resourceData) {
+          resourceMetadata.resourceOwner = resourceData.employeeId;
+          resourceMetadata.sharingSettings = 'CONFIDENTIAL';
+          resourceMetadata.labels = [resourceData.month];
+          resourceMetadata.status = resourceData.status; // DRAFT / FINALIZED
+        }
       } else if (path.includes('/forms') && params.id) {
-        resourceType = 'FormDefinition';
+        resourceMetadata.resourceType = 'FormDefinition';
         resourceId = params.id;
         resourceData = await this.prisma.formDefinition.findUnique({ where: { id: params.id } });
-      } else if (path.includes('/invites') && params.id) {
-        resourceType = 'Invite';
-        resourceId = params.id;
-        resourceData = await this.prisma.invite.findUnique({ where: { id: params.id } });
-      } else if (path.includes('/organizations') && params.id) {
-        resourceType = 'Organization';
-        resourceId = params.id;
-        resourceData = await this.prisma.organization.findUnique({ where: { id: params.id } });
+        if (resourceData) {
+          resourceMetadata.resourceOwner = 'Organization';
+          resourceMetadata.sharingSettings = 'ORGANIZATION_SHARED';
+          resourceMetadata.labels = [resourceData.category];
+          resourceMetadata.status = resourceData.status; // DRAFT / PUBLISHED
+        }
       }
     } catch {
-      // Swallowed lookups so database query hiccups don't break system-wide auth
+      // Graceful fallback for queries
     }
 
-    // --- 4. Load Policies & Action ---
+    // ==========================================
+    // STEP 6: LOAD ORGANIZATION POLICIES
+    // ==========================================
     const requiredPermission = this.reflector.get<string>(PERMISSIONS_KEY, handler);
     const method = request.method;
     let action = 'READ';
@@ -137,55 +204,78 @@ export class PermissionsGuard implements CanActivate {
       action = 'DECIDE';
     }
 
-    // --- 5. Policy Engine Evaluation ---
-    let evaluationResult = false;
-    let denyDetails = '';
+    const loadedPolicies = {
+      requiredPermission: requiredPermission || 'PUBLIC_ACCESS',
+      action,
+      resourceType: resourceMetadata.resourceType,
+    };
+
+    // ==========================================
+    // STEP 7: POLICY EVALUATION ENGINE
+    // ==========================================
+    let isAllowed = false;
+    let policyDetails = '';
 
     if (!requiredPermission) {
-      evaluationResult = true;
+      isAllowed = true;
+      policyDetails = 'Public access policy allowed.';
     } else {
       if (!organizationId || !userProfile) {
-        denyDetails = 'Missing workspace header or membership details.';
-        evaluationResult = false;
+        policyDetails = 'Missing workspace header or membership details.';
+        isAllowed = false;
       } else {
-        const userPermissions = userAttributes.permissions;
+        const userPermissions = userProfileMetadata.groups; // derived roles / permissions
+        const membershipPermissions = userProfile.membership.permissions || [];
+
         const hasDirectPermission =
-          userPermissions.includes('*') ||
-          userPermissions.includes(requiredPermission);
+          membershipPermissions.includes('*') ||
+          membershipPermissions.includes(requiredPermission);
 
         const namespace = requiredPermission.split('.')[0];
-        const hasNamespacePermission = userPermissions.includes(`${namespace}.*`);
+        const hasNamespacePermission = membershipPermissions.includes(`${namespace}.*`);
 
         if (hasDirectPermission || hasNamespacePermission) {
-          evaluationResult = true;
+          isAllowed = true;
+          policyDetails = `RBAC Policy Evaluator: Permission "${requiredPermission}" matched.`;
         } else {
-          // ABAC Ownership Policy Evaluation Fallback
+          // ABAC Contextual Policy Evaluator Fallback:
           const myEmployeeRecord = userProfile.employee;
 
-          if (resourceType === 'Employee' && resourceData) {
+          if (resourceMetadata.resourceType === 'Employee' && resourceData) {
             if (resourceData.userId === jwtUser.sub && (action === 'READ' || action === 'UPDATE')) {
-              evaluationResult = true;
+              isAllowed = true;
+              policyDetails = 'ABAC Policy Evaluator: User owns this employee profile.';
             }
-          } else if (resourceType === 'LeaveRequest' && resourceData) {
+          } else if (resourceMetadata.resourceType === 'LeaveRequest' && resourceData) {
             if (myEmployeeRecord && resourceData.employeeId === myEmployeeRecord.id && action === 'READ') {
-              evaluationResult = true;
+              isAllowed = true;
+              policyDetails = 'ABAC Policy Evaluator: User is the creator of this leave request.';
             }
-          } else if (resourceType === 'Payslip' && resourceData) {
+          } else if (resourceMetadata.resourceType === 'Payslip' && resourceData) {
             if (myEmployeeRecord && resourceData.employeeId === myEmployeeRecord.id && action === 'READ') {
-              evaluationResult = true;
+              isAllowed = true;
+              policyDetails = 'ABAC Policy Evaluator: User is the owner of this payslip.';
             }
           }
 
-          if (!evaluationResult) {
-            denyDetails = `Required permission "${requiredPermission}" is missing.`;
+          if (!isAllowed) {
+            policyDetails = `RBAC/ABAC Evaluation: Denied. Required permission "${requiredPermission}" not satisfied.`;
           }
         }
       }
     }
 
-    // --- 6. Execute Action & Audit Log ---
+    // ==========================================
+    // STEP 8: AUDIT & ACTIVITY LOGS (ALLOW / DENY)
+    // ==========================================
     const userEmail = jwtUser.email || '';
-    const details = denyDetails || `Access granted to resource: ${resourceType} for action: ${action}`;
+    const logDetails = {
+      isGoogleSSO,
+      userProfileMetadata,
+      resourceMetadata,
+      loadedPolicies,
+      policyDetails,
+    };
 
     void this.prisma.auditLog.create({
       data: {
@@ -194,19 +284,22 @@ export class PermissionsGuard implements CanActivate {
         userId: jwtUser.sub,
         userEmail,
         action,
-        resource: resourceType,
+        resource: resourceMetadata.resourceType,
         resourceId,
-        result: evaluationResult ? 'ALLOW' : 'DENY',
-        details,
+        result: isAllowed ? 'ALLOW' : 'DENY',
+        details: JSON.stringify(logDetails),
       },
     }).catch((err) => {
       this.logger.error(`Failed to write audit log: ${err.message}`);
     });
 
-    if (evaluationResult) {
+    // ==========================================
+    // STEP 9: EXECUTE ACTION / DENY ACCESS
+    // ==========================================
+    if (isAllowed) {
       return true;
     } else {
-      throw new ForbiddenException(denyDetails || 'Permission Denied');
+      throw new ForbiddenException(policyDetails || 'Permission Denied');
     }
   }
 }

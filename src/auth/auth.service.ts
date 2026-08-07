@@ -13,16 +13,25 @@ import type { JwtPayload } from '../common/jwt-payload';
 
 @Injectable()
 export class AuthService {
-  private readonly googleClient: OAuth2Client;
+  private googleClient: OAuth2Client | null = null;
 
   constructor(
     private readonly usersService: UsersService,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
-  ) {
-    this.googleClient = new OAuth2Client(
-      this.configService.getOrThrow<string>('GOOGLE_CLIENT_ID'),
-    );
+  ) {}
+
+  private getGoogleClient(): OAuth2Client {
+    if (!this.googleClient) {
+      const clientId = this.configService.get<string>('GOOGLE_CLIENT_ID');
+      if (!clientId) {
+        throw new UnauthorizedException(
+          'Google Sign-In is not configured on this server (GOOGLE_CLIENT_ID missing).',
+        );
+      }
+      this.googleClient = new OAuth2Client(clientId);
+    }
+    return this.googleClient;
   }
 
   async signup(params: {
@@ -78,9 +87,11 @@ export class AuthService {
     let name: string;
 
     try {
-      const ticket = await this.googleClient.verifyIdToken({
+      const client = this.getGoogleClient();
+      const clientId = this.configService.get<string>('GOOGLE_CLIENT_ID');
+      const ticket = await client.verifyIdToken({
         idToken: params.credential,
-        audience: this.configService.getOrThrow<string>('GOOGLE_CLIENT_ID'),
+        audience: clientId,
       });
 
       const payload = ticket.getPayload();
@@ -89,8 +100,11 @@ export class AuthService {
       }
 
       email = payload.email;
-      name = payload.name ?? payload.email.split('@')[0];
-    } catch {
+      const atParts = payload.email.split('@');
+      name = payload.name ?? (atParts.length > 0 ? atParts[0]! : payload.email);
+    } catch (err) {
+      // Re-throw NestJS HTTP exceptions (e.g. missing client ID) as-is
+      if (err instanceof UnauthorizedException) throw err;
       throw new UnauthorizedException(
         'Google sign-in failed — the token could not be verified.',
       );
