@@ -28,6 +28,7 @@ import { PermissionsGuard, RequirePermission } from '../common/permissions.guard
 import { CurrentMembership } from '../common/current-membership.decorator';
 import { toPublicUser, type PublicUser, type Membership } from '../users/user.entity';
 import { uploadEmployeePhoto } from '../common/cloudinary-upload';
+import { NotificationsService } from '../notifications/notifications.service';
 
 const MAX_PHOTO_BYTES = 5 * 1024 * 1024;
 
@@ -38,6 +39,7 @@ export class InvitesController {
     private readonly usersService: UsersService,
     private readonly employeesService: EmployeesService,
     private readonly configService: ConfigService,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   // ---- Members -------------------------------------------------------------
@@ -137,6 +139,16 @@ export class InvitesController {
     }
 
     await this.usersService.updateMembershipPermissions(targetMem.id, dto.permissions);
+
+    await this.notificationsService.create({
+      userId: id,
+      organizationId,
+      title: 'Role Updated',
+      body: 'Your role and permissions in this company have been updated.',
+      kind: 'company',
+      link: '/dashboard',
+    });
+
     return { ok: true };
   }
 

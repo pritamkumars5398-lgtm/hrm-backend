@@ -2,10 +2,11 @@ import { Module } from '@nestjs/common';
 import { EmployeesController } from './employees.controller';
 import { EmployeesService } from './employees.service';
 import { AuthModule } from '../auth/auth.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 // AuthModule supplies JwtService for JwtAuthGuard; PrismaService is global.
 @Module({
-  imports: [AuthModule],
+  imports: [AuthModule, NotificationsModule],
   controllers: [EmployeesController],
   providers: [EmployeesService],
   exports: [EmployeesService],

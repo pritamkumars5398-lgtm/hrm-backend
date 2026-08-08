@@ -1,11 +1,15 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { toPublicEmployee, type PublicEmployee } from './employee.entity';
 import type { UpdateEmployeeDto } from './dto/update-employee.dto';
 
 @Injectable()
 export class EmployeesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notifications: NotificationsService,
+  ) {}
 
   async findSelf(userId: string, organizationId: string) {
     const all = await this.prisma.employee.findMany({
@@ -133,6 +137,14 @@ export class EmployeesService {
 
     const updated = await this.prisma.employee.update({ where: { id }, data });
 
+    if (
+      patch.status !== undefined &&
+      patch.status !== existing.status &&
+      ['INACTIVE', 'NOTICE'].includes(patch.status)
+    ) {
+      await this.notifyAdminsOfLeave(updated, organizationId);
+    }
+
     const emailById = await this.emailsFor([updated.userId]);
     const managerNameById = await this.managerNamesFor([updated]);
 
@@ -172,6 +184,7 @@ export class EmployeesService {
     // is a real product decision, deliberately left for the Attendance/Leave/
     // Performance "my reports" work that actually depends on it (Phase 3 §4).
     await this.prisma.employee.update({ where: { id }, data: { deletedAt: new Date() } });
+    await this.notifyAdminsOfLeave(existing, organizationId);
   }
 
   /**
@@ -184,6 +197,7 @@ export class EmployeesService {
     const existing = await this.prisma.employee.findFirst({ where: { userId, organizationId } });
     if (existing && !existing.deletedAt) {
       await this.prisma.employee.update({ where: { id: existing.id }, data: { deletedAt: new Date() } });
+      await this.notifyAdminsOfLeave(existing, organizationId);
     }
   }
 
@@ -219,5 +233,26 @@ export class EmployeesService {
       }
     }
     return result;
+  }
+
+  private async notifyAdminsOfLeave(employee: { firstName: string; lastName: string }, organizationId: string): Promise<void> {
+    const memberships = await this.prisma.membership.findMany({ where: { organizationId } });
+    const recipientIds = memberships
+      .filter((m) =>
+        m.permissions.includes('*') ||
+        m.permissions.includes('employees.*') ||
+        m.permissions.includes('employees.manage')
+      )
+      .map((m) => m.userId);
+
+    if (recipientIds.length > 0) {
+      await this.notifications.createForMany(recipientIds, {
+        organizationId,
+        title: 'Employee Departure',
+        body: `${employee.firstName} ${employee.lastName} has left or is leaving the company.`,
+        kind: 'company',
+        link: '/dashboard/employees',
+      });
+    }
   }
 }
