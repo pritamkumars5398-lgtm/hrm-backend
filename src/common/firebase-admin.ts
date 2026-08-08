@@ -55,7 +55,7 @@ export async function sendPushToTokens(
 
   try {
     const messaging = getMessaging(firebaseApp);
-    const result = await messaging.sendEachForMulticast({
+    const result = await (messaging as any).sendEachForMulticast({
       tokens,
       notification,
       data,

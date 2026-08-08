@@ -5,11 +5,12 @@ import { AuthModule } from '../auth/auth.module';
 import { UsersModule } from '../users/users.module';
 import { EmployeesModule } from '../employees/employees.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { EmailService } from '../common/email.service';
 
 @Module({
   imports: [UsersModule, AuthModule, EmployeesModule, NotificationsModule],
   controllers: [InvitesController],
-  providers: [InvitesService],
+  providers: [InvitesService, EmailService],
   exports: [InvitesService],
 })
 export class InvitesModule {}

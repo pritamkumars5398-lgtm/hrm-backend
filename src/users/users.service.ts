@@ -108,38 +108,50 @@ export class UsersService implements OnModuleInit {
     }
   }
 
-  findById(id: string): Promise<User | null> {
-    return this.prisma.user.findUnique({ where: { id } }) as Promise<User | null>;
+  async findById(id: string): Promise<User | null> {
+    try {
+      return (await this.prisma.user.findUnique({ where: { id } })) as User | null;
+    } catch (err) {
+      PrismaService.rethrowDbError(err);
+    }
   }
 
-  findByEmail(email: string): Promise<User | null> {
-    return this.prisma.user.findUnique({
-      where: { email: this.normaliseEmail(email) },
-    }) as Promise<User | null>;
+  async findByEmail(email: string): Promise<User | null> {
+    try {
+      return (await this.prisma.user.findUnique({
+        where: { email: this.normaliseEmail(email) },
+      })) as User | null;
+    } catch (err) {
+      PrismaService.rethrowDbError(err);
+    }
   }
 
   /** Everyone belonging to one company. Never returns users from another org. */
   async findAllByOrganization(organizationId: string): Promise<any[]> {
-    const memberships = await this.prisma.membership.findMany({
-      where: { organizationId },
-      orderBy: { createdAt: 'asc' },
-    });
+    try {
+      const memberships = await this.prisma.membership.findMany({
+        where: { organizationId },
+        orderBy: { createdAt: 'asc' },
+      });
 
-    const userIds = memberships.map((m) => m.userId);
-    const users = await this.prisma.user.findMany({
-      where: { id: { in: userIds } },
-    });
+      const userIds = memberships.map((m) => m.userId);
+      const users = await this.prisma.user.findMany({
+        where: { id: { in: userIds } },
+      });
 
-    return memberships.map((m) => {
-      const u = users.find((user) => user.id === m.userId)!;
-      return {
-        ...u,
-        jobTitle: m.jobTitle,
-        permissions: m.permissions,
-        membershipId: m.id,
-        organizationId: m.organizationId,
-      };
-    });
+      return memberships.map((m) => {
+        const u = users.find((user) => user.id === m.userId)!;
+        return {
+          ...u,
+          jobTitle: m.jobTitle,
+          permissions: m.permissions,
+          membershipId: m.id,
+          organizationId: m.organizationId,
+        };
+      });
+    } catch (err) {
+      PrismaService.rethrowDbError(err);
+    }
   }
 
   async create(params: {
@@ -148,16 +160,20 @@ export class UsersService implements OnModuleInit {
     name: string;
     requiresPasswordReset?: boolean;
   }): Promise<User> {
-    return (await this.prisma.user.create({
-      data: {
-        id: `usr-${randomUUID().slice(0, 8)}`,
-        email: this.normaliseEmail(params.email),
-        passwordHash: params.password ? await bcrypt.hash(params.password, BCRYPT_ROUNDS) : '',
-        requiresPasswordReset: params.requiresPasswordReset ?? false,
-        name: params.name.trim(),
-        avatarInitials: this.initialsOf(params.name),
-      },
-    })) as User;
+    try {
+      return (await this.prisma.user.create({
+        data: {
+          id: `usr-${randomUUID().slice(0, 8)}`,
+          email: this.normaliseEmail(params.email),
+          passwordHash: params.password ? await bcrypt.hash(params.password, BCRYPT_ROUNDS) : '',
+          requiresPasswordReset: params.requiresPasswordReset ?? false,
+          name: params.name.trim(),
+          avatarInitials: this.initialsOf(params.name),
+        },
+      })) as User;
+    } catch (err) {
+      PrismaService.rethrowDbError(err);
+    }
   }
 
   async verifyPassword(user: User, password: string): Promise<boolean> {
@@ -172,47 +188,59 @@ export class UsersService implements OnModuleInit {
     organizationId: string,
     jobTitle?: string,
   ): Promise<any> {
-    return this.prisma.membership.create({
-      data: {
-        id: `mem-${randomUUID().slice(0, 8)}`,
-        userId,
-        organizationId,
-        jobTitle: jobTitle?.trim() || '',
-        permissions: ['*'], // The Owner always holds every permission
-      },
-    });
+    try {
+      return await this.prisma.membership.create({
+        data: {
+          id: `mem-${randomUUID().slice(0, 8)}`,
+          userId,
+          organizationId,
+          jobTitle: jobTitle?.trim() || '',
+          permissions: ['*'], // The Owner always holds every permission
+        },
+      });
+    } catch (err) {
+      PrismaService.rethrowDbError(err);
+    }
   }
 
   async getMemberships(userId: string) {
-    const memberships = await this.prisma.membership.findMany({
-      where: { userId },
-    });
+    try {
+      const memberships = await this.prisma.membership.findMany({
+        where: { userId },
+      });
 
-    if (memberships.length === 0) return [];
+      if (memberships.length === 0) return [];
 
-    const orgIds = memberships.map((m) => m.organizationId);
-    const orgs = await this.prisma.organization.findMany({
-      where: { id: { in: orgIds } },
-      select: { id: true, name: true },
-    });
+      const orgIds = memberships.map((m) => m.organizationId);
+      const orgs = await this.prisma.organization.findMany({
+        where: { id: { in: orgIds } },
+        select: { id: true, name: true },
+      });
 
-    return memberships.map((m) => {
-      const org = orgs.find((o) => o.id === m.organizationId);
-      return {
-        ...m,
-        organizationName: org?.name ?? 'Unknown Company',
-      };
-    });
+      return memberships.map((m) => {
+        const org = orgs.find((o) => o.id === m.organizationId);
+        return {
+          ...m,
+          organizationName: org?.name ?? 'Unknown Company',
+        };
+      });
+    } catch (err) {
+      PrismaService.rethrowDbError(err);
+    }
   }
 
   async updatePassword(userId: string, newPassword: string): Promise<void> {
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: { 
-        passwordHash: await bcrypt.hash(newPassword, BCRYPT_ROUNDS),
-        requiresPasswordReset: false,
-      },
-    });
+    try {
+      await this.prisma.user.update({
+        where: { id: userId },
+        data: {
+          passwordHash: await bcrypt.hash(newPassword, BCRYPT_ROUNDS),
+          requiresPasswordReset: false,
+        },
+      });
+    } catch (err) {
+      PrismaService.rethrowDbError(err);
+    }
   }
 
   /**
@@ -221,19 +249,27 @@ export class UsersService implements OnModuleInit {
    * other company they belong to — this deletes just the `Membership` row.
    */
   async removeMembership(userId: string, organizationId: string): Promise<void> {
-    await this.prisma.membership.delete({
-      where: { userId_organizationId: { userId, organizationId } },
-    });
+    try {
+      await this.prisma.membership.delete({
+        where: { userId_organizationId: { userId, organizationId } },
+      });
+    } catch (err) {
+      PrismaService.rethrowDbError(err);
+    }
   }
 
   /** Overwrites a membership's granular permission list wholesale — a revision,
    *  not a merge, matching how the invite form's role preset already works
    *  (pick a starting point, adjust individual keys, save the whole list). */
   async updateMembershipPermissions(membershipId: string, permissions: string[]): Promise<void> {
-    await this.prisma.membership.update({
-      where: { id: membershipId },
-      data: { permissions },
-    });
+    try {
+      await this.prisma.membership.update({
+        where: { id: membershipId },
+        data: { permissions },
+      });
+    } catch (err) {
+      PrismaService.rethrowDbError(err);
+    }
   }
 
   private normaliseEmail(email: string): string {
