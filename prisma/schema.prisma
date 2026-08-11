@@ -265,6 +265,7 @@ model Review {
 model Document {
   id             String    @id @map("_id")
   organizationId String
+  employeeId     String?
   name           String
   description    String
   category       String // Policies | Templates | Contracts | Compliance | Onboarding
@@ -281,6 +282,7 @@ model Document {
   deletedAt      DateTime?
 
   @@index([organizationId, category])
+  @@index([organizationId, employeeId])
 }
 
 // Real, persisted in-app notifications — not the mock decorative bell. A

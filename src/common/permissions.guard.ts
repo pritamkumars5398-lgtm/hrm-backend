@@ -119,6 +119,10 @@ export class PermissionsGuard implements CanActivate {
       }
     }
 
+    if (organizationId && userProfileMetadata.status === 'INACTIVE') {
+      throw new ForbiddenException('Your employee profile is inactive.');
+    }
+
     // ==========================================
     // STEP 5: USER REQUESTS RESOURCE & LOAD METADATA
     // ==========================================
@@ -222,6 +226,9 @@ export class PermissionsGuard implements CanActivate {
     } else {
       if (!organizationId || !userProfile) {
         policyDetails = 'Missing workspace header or membership details.';
+        isAllowed = false;
+      } else if (userProfileMetadata.status === 'INACTIVE') {
+        policyDetails = 'Access Denied: Your employee profile is inactive.';
         isAllowed = false;
       } else {
         const userPermissions = userProfileMetadata.groups; // derived roles / permissions

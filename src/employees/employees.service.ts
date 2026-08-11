@@ -1,14 +1,16 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { toPublicEmployee, type PublicEmployee } from './employee.entity';
 import type { UpdateEmployeeDto } from './dto/update-employee.dto';
+import { writeAuditLog } from '../common/audit-log';
 
 @Injectable()
 export class EmployeesService {
   constructor(private readonly prisma: PrismaService) {}
 
   /** Every employee record in one company. Never crosses org boundaries (§1). */
-  async findByOrganization(organizationId: string): Promise<PublicEmployee[]> {
+  async findByOrganization(organizationId: string, status?: 'ACTIVE' | 'INACTIVE' | 'ALL'): Promise<PublicEmployee[]> {
     const all = await this.prisma.employee.findMany({
       where: { organizationId },
       orderBy: { createdAt: 'asc' },
@@ -18,32 +20,144 @@ export class EmployeesService {
     // Mongo filter does NOT match documents created before the field existed,
     // which would silently hide the whole directory. On read a missing field
     // comes back as null, so `!e.deletedAt` correctly keeps active records.
-    const employees = all.filter((e) => !e.deletedAt);
+    const employees = all.filter((e) => {
+      const isInactive = !!e.deletedAt;
+      if (status === 'INACTIVE') return isInactive;
+      if (status === 'ALL') return true;
+      return !isInactive; // Default to ACTIVE
+    });
 
     const emailById = await this.emailsFor(employees.map((e) => e.userId));
     const managerNameById = await this.managerNamesFor(employees);
 
+    // Fetch active approved leave requests for today
+    const todayStr = new Date().toISOString().split('T')[0];
+    const activeLeaves = await this.prisma.leaveRequest.findMany({
+      where: {
+        organizationId,
+        status: 'APPROVED',
+        startDate: { lte: todayStr },
+        endDate: { gte: todayStr },
+      },
+      select: { employeeId: true },
+    });
+    const onLeaveEmployeeIds = new Set(activeLeaves.map((l) => l.employeeId));
+
     return employees.map((e) =>
-      toPublicEmployee(e, emailById.get(e.userId) ?? '', managerNameById.get(e.id) ?? null),
+      toPublicEmployee(
+        e,
+        emailById.get(e.userId) ?? '',
+        managerNameById.get(e.id) ?? null,
+        onLeaveEmployeeIds.has(e.id),
+      ),
     );
   }
 
   async findOne(id: string, organizationId: string): Promise<PublicEmployee> {
     const employee = await this.prisma.employee.findUnique({ where: { id } });
 
-    // Scope check folded into the lookup: another org's id — or a soft-deleted
-    // record — reads as "not found".
-    if (!employee || employee.organizationId !== organizationId || employee.deletedAt) {
+    // Scope check folded into the lookup: another org's id reads as "not found".
+    if (!employee || employee.organizationId !== organizationId) {
       throw new NotFoundException('That employee no longer exists.');
     }
 
     const emailById = await this.emailsFor([employee.userId]);
     const managerNameById = await this.managerNamesFor([employee]);
-    return toPublicEmployee(employee, emailById.get(employee.userId) ?? '', managerNameById.get(employee.id) ?? null);
+
+    // Check if on leave today
+    const todayStr = new Date().toISOString().split('T')[0];
+    const leave = await this.prisma.leaveRequest.findFirst({
+      where: {
+        organizationId,
+        employeeId: employee.id,
+        status: 'APPROVED',
+        startDate: { lte: todayStr },
+        endDate: { gte: todayStr },
+      },
+    });
+
+    return toPublicEmployee(
+      employee,
+      emailById.get(employee.userId) ?? '',
+      managerNameById.get(employee.id) ?? null,
+      !!leave,
+    );
+  }
+
+  async findByUserId(userId: string, organizationId: string): Promise<PublicEmployee> {
+    let employee = await this.prisma.employee.findUnique({
+      where: {
+        userId_organizationId: {
+          userId,
+          organizationId,
+        },
+      },
+    });
+
+    if (employee && employee.deletedAt) {
+      throw new NotFoundException('Employee profile is inactive.');
+    }
+
+    if (!employee) {
+      // Auto-create a basic Employee record for this user
+      const user = await this.prisma.user.findUnique({ where: { id: userId } });
+      const membership = await this.prisma.membership.findUnique({
+        where: {
+          userId_organizationId: {
+            userId,
+            organizationId,
+          },
+        },
+      });
+
+      if (!user || !membership) {
+        throw new NotFoundException('User profile or workspace membership not found.');
+      }
+
+      employee = await this.prisma.employee.create({
+        data: {
+          id: `emp-${randomUUID().slice(0, 8)}`,
+          userId,
+          organizationId,
+          employeeId: `EMP-${Math.floor(1000 + Math.random() * 9000)}`,
+          firstName: user.name.split(' ')[0] || '',
+          lastName: user.name.split(' ').slice(1).join(' ') || '',
+          jobTitle: membership.jobTitle || 'Employee',
+          department: 'General Administration',
+          startDate: new Date(),
+          employmentType: 'Full-time',
+          workLocation: 'Office-Default',
+          contactNumber: '',
+          homeAddress: '',
+        },
+      });
+    }
+
+    const emailById = await this.emailsFor([employee.userId]);
+    const managerNameById = await this.managerNamesFor([employee]);
+
+    // Check if on leave today
+    const todayStr = new Date().toISOString().split('T')[0];
+    const leave = await this.prisma.leaveRequest.findFirst({
+      where: {
+        organizationId,
+        employeeId: employee.id,
+        status: 'APPROVED',
+        startDate: { lte: todayStr },
+        endDate: { gte: todayStr },
+      },
+    });
+
+    return toPublicEmployee(
+      employee,
+      emailById.get(employee.userId) ?? '',
+      managerNameById.get(employee.id) ?? null,
+      !!leave,
+    );
   }
 
   /** Edits an HR record. Org-scoped: you can only touch your own company's people. */
-  async update(id: string, organizationId: string, patch: UpdateEmployeeDto): Promise<PublicEmployee> {
+  async update(id: string, organizationId: string, patch: UpdateEmployeeDto, callerUserId: string): Promise<PublicEmployee> {
     const existing = await this.prisma.employee.findUnique({ where: { id } });
     if (!existing || existing.organizationId !== organizationId || existing.deletedAt) {
       throw new NotFoundException('That employee no longer exists.');
@@ -79,9 +193,37 @@ export class EmployeesService {
 
     const updated = await this.prisma.employee.update({ where: { id }, data });
 
+    // Write Audit Log
+    await writeAuditLog(this.prisma, {
+      organizationId,
+      userId: callerUserId,
+      action: 'UPDATE',
+      resource: 'Employee',
+      resourceId: updated.id,
+      result: 'ALLOW',
+      details: { updatedFields: Object.keys(data) },
+    });
+
     const emailById = await this.emailsFor([updated.userId]);
     const managerNameById = await this.managerNamesFor([updated]);
-    return toPublicEmployee(updated, emailById.get(updated.userId) ?? '', managerNameById.get(updated.id) ?? null);
+
+    const todayStr = new Date().toISOString().split('T')[0];
+    const leave = await this.prisma.leaveRequest.findFirst({
+      where: {
+        organizationId,
+        employeeId: updated.id,
+        status: 'APPROVED',
+        startDate: { lte: todayStr },
+        endDate: { gte: todayStr },
+      },
+    });
+
+    return toPublicEmployee(
+      updated,
+      emailById.get(updated.userId) ?? '',
+      managerNameById.get(updated.id) ?? null,
+      !!leave,
+    );
   }
 
   /**
@@ -89,7 +231,7 @@ export class EmployeesService {
    * and are managed separately in Team Members (§9) — deleting an Employee record
    * does not revoke portal access.
    */
-  async remove(id: string, organizationId: string): Promise<void> {
+  async remove(id: string, organizationId: string, callerUserId: string): Promise<void> {
     const existing = await this.prisma.employee.findUnique({ where: { id } });
     if (!existing || existing.organizationId !== organizationId || existing.deletedAt) {
       throw new NotFoundException('That employee no longer exists.');
@@ -101,6 +243,17 @@ export class EmployeesService {
     // is a real product decision, deliberately left for the Attendance/Leave/
     // Performance "my reports" work that actually depends on it (Phase 3 §4).
     await this.prisma.employee.update({ where: { id }, data: { deletedAt: new Date() } });
+
+    // Write Audit Log
+    await writeAuditLog(this.prisma, {
+      organizationId,
+      userId: callerUserId,
+      action: 'DELETE',
+      resource: 'Employee',
+      resourceId: id,
+      result: 'ALLOW',
+      details: { email: existing.contactNumber },
+    });
   }
 
   /**

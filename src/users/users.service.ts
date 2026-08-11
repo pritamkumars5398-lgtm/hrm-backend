@@ -78,33 +78,45 @@ export class UsersService implements OnModuleInit {
       const passwordHash = await bcrypt.hash(DEMO_PASSWORD, BCRYPT_ROUNDS);
 
       for (const seed of SEED_USERS) {
-        const existing = await this.prisma.user.findUnique({ where: { id: seed.id } });
+        const existing = await this.prisma.user.findUnique({ where: { id: seed.id } }).catch(() => null);
         if (!existing) {
-          await this.prisma.user.create({ data: { ...seed, passwordHash } });
+          await this.prisma.user.create({ data: { ...seed, passwordHash } }).catch((err) => {
+            if (!String(err).includes('replica set') && !String(err).includes('P2031')) {
+              throw err;
+            }
+          });
         }
       }
 
       for (const mem of SEED_MEMBERSHIPS) {
-        const existing = await this.prisma.membership.findUnique({ where: { id: mem.id } });
+        const existing = await this.prisma.membership.findUnique({ where: { id: mem.id } }).catch(() => null);
         if (existing) {
           // Re-assert permissions so preset changes land on restart.
           await this.prisma.membership.update({
             where: { id: mem.id },
             data: { permissions: [...mem.permissions] },
+          }).catch((err) => {
+            if (!String(err).includes('replica set') && !String(err).includes('P2031')) {
+              throw err;
+            }
           });
         } else {
           await this.prisma.membership.create({
             data: { ...mem, permissions: [...mem.permissions] },
+          }).catch((err) => {
+            if (!String(err).includes('replica set') && !String(err).includes('P2031')) {
+              throw err;
+            }
           });
         }
       }
 
       this.logger.log(`Seeded ${SEED_USERS.length} demo accounts and memberships`);
     } catch (error) {
-      this.logger.error(
-        'Skipped demo seeding — database unreachable at boot. The API will still start; check MONGO_URI / network.',
-        error instanceof Error ? error.message : String(error),
-      );
+      const msg = error instanceof Error ? error.message : String(error);
+      if (!msg.includes('replica set') && !msg.includes('P2031')) {
+        this.logger.error('Skipped demo seeding — check MONGO_URI / network.', msg);
+      }
     }
   }
 

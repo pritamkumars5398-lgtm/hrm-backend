@@ -50,9 +50,23 @@ export function toPublicEmployee(
   employee: Employee,
   email: string,
   managerName: string | null = null,
+  isOnLeave: boolean = false,
 ): PublicEmployee {
   const name = `${employee.firstName} ${employee.lastName}`.trim();
   const joinedAt = employee.startDate.toISOString();
+
+  let status: PublicEmployee['status'] = 'ACTIVE';
+  if (employee.deletedAt) {
+    status = 'INACTIVE';
+  } else if (isOnLeave) {
+    status = 'ON_LEAVE';
+  } else {
+    const ninetyDaysAgo = new Date();
+    ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+    if (employee.startDate > ninetyDaysAgo) {
+      status = 'PROBATION';
+    }
+  }
 
   return {
     id: employee.id,
@@ -64,8 +78,7 @@ export function toPublicEmployee(
     phone: employee.contactNumber ?? '',
     department: employee.department,
     designation: employee.jobTitle,
-    // No lifecycle tracking yet — everyone added through the invite flow is active.
-    status: 'ACTIVE',
+    status,
     employmentType: mapEmploymentType(employee.employmentType),
     location: employee.workLocation,
     joinedAt,

@@ -11,6 +11,7 @@ import { UsersService } from '../users/users.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { EmailService } from '../common/email.service';
 import type { Invite } from './invite.entity';
+import { writeAuditLog } from '../common/audit-log';
 
 type FinancialDetailsInput = {
   accName: string;
@@ -132,15 +133,14 @@ export class InvitesService {
       },
     });
 
-    // 4. Create Employee record ONLY for the Employee Management entry point.
-    //    A Team Members invite is access-control only — User + Membership, no HR
-    //    record (§9). Legacy calls without a source default to team-members.
+    let targetEmployeeId = '';
     if (params.source === 'employee-management') {
       const existingEmployee = await this.prisma.employee.findFirst({
         where: { userId: user.id, organizationId: params.organizationId }
       });
 
       if (existingEmployee?.deletedAt) {
+        targetEmployeeId = existingEmployee.id;
         // A soft-deleted record still holds the unique (userId, org) slot, so a
         // re-add restores and refreshes it rather than failing the create.
         await this.prisma.employee.update({
@@ -161,7 +161,7 @@ export class InvitesService {
           },
         });
       } else if (!existingEmployee) {
-        await this.prisma.employee.create({
+        const newEmp = await this.prisma.employee.create({
           data: {
             id: `emp-${randomUUID().slice(0, 8)}`,
             userId: user.id,
@@ -182,7 +182,19 @@ export class InvitesService {
             ...(params.familyDetails?.length ? { familyDetails: params.familyDetails } : {}),
           },
         });
+        targetEmployeeId = newEmp.id;
       }
+
+      // Write Audit Log
+      await writeAuditLog(this.prisma, {
+        organizationId: params.organizationId,
+        userId: params.invitedBy,
+        action: 'CREATE',
+        resource: 'Employee',
+        resourceId: targetEmployeeId,
+        result: 'ALLOW',
+        details: { email: params.email, employeeId: params.employeeId },
+      });
     }
 
     // 5. Create Invite record

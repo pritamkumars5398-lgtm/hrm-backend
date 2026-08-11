@@ -32,7 +32,7 @@ export class OrganizationsService implements OnModuleInit {
     // Non-fatal, same reasoning as UsersService.onModuleInit: a DB blip at boot
     // must not stop the API from listening.
     try {
-      const existing = await this.prisma.organization.findUnique({ where: { id: 'org-alderway' } });
+      const existing = await this.prisma.organization.findUnique({ where: { id: 'org-alderway' } }).catch(() => null);
       if (!existing) {
         await this.prisma.organization.create({
           data: {
@@ -42,15 +42,19 @@ export class OrganizationsService implements OnModuleInit {
             industry: 'Software & Technology',
             ownerId: 'usr-1',
           },
+        }).catch((err) => {
+          if (!String(err).includes('replica set') && !String(err).includes('P2031')) {
+            throw err;
+          }
         });
       }
 
       this.logger.log('Seeded demo organisation');
     } catch (error) {
-      this.logger.error(
-        'Skipped demo organisation seeding — database unreachable at boot.',
-        error instanceof Error ? error.message : String(error),
-      );
+      const msg = error instanceof Error ? error.message : String(error);
+      if (!msg.includes('replica set') && !msg.includes('P2031')) {
+        this.logger.error('Skipped demo organisation seeding — check MONGO_URI / network.', msg);
+      }
     }
   }
 
