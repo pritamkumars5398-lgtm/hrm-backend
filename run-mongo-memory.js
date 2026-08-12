@@ -6,6 +6,7 @@ async function start() {
       {
         port: 27017,
         dbName: 'keystone',
+        launchTimeout: 60000,
       },
     ],
     replSet: {

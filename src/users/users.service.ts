@@ -11,15 +11,15 @@ const DEMO_PASSWORD = 'demo1234';
 const SEED_USERS = [
   {
     id: 'usr-1',
-    email: 'owner@demo.com',
-    name: 'Priya Nair',
-    avatarInitials: 'PN',
-  },
-  {
-    id: 'usr-2',
     email: 'hr@demo.com',
     name: 'Marta Lindqvist',
     avatarInitials: 'ML',
+  },
+  {
+    id: 'usr-2',
+    email: 'owner@demo.com',
+    name: 'Priya Nair',
+    avatarInitials: 'PN',
   },
   {
     id: 'usr-3',
@@ -34,15 +34,15 @@ const SEED_MEMBERSHIPS = [
     id: 'mem-1',
     userId: 'usr-1',
     organizationId: 'org-alderway',
-    jobTitle: 'Founder & CEO',
-    permissions: ['*'],
+    jobTitle: 'HR Manager',
+    permissions: ['employees.*', 'attendance.*', 'leave.*', 'documents.*', 'reports.view', 'team.invite'],
   },
   {
     id: 'mem-2',
     userId: 'usr-2',
     organizationId: 'org-alderway',
-    jobTitle: 'HR Manager',
-    permissions: ['employees.*', 'attendance.*', 'leave.*', 'documents.*', 'reports.view', 'team.invite'],
+    jobTitle: 'Founder & CEO',
+    permissions: ['*'],
   },
   {
     id: 'mem-3',

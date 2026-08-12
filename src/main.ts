@@ -16,6 +16,11 @@ const logger = new Logger('Bootstrap');
  * Atlas / production URIs (mongodb+srv://) are passed through unchanged.
  */
 async function ensureMongoDB(): Promise<void> {
+  if (process.env.EMBEDDED_MONGO_RUNNING === 'true') {
+    logger.log('Embedded MongoDB is already running (started by runner).');
+    return;
+  }
+
   const uri = process.env.MONGO_URI ?? '';
   const isLocalhost =
     uri.includes('localhost') || uri.includes('127.0.0.1') || uri === '';
@@ -29,7 +34,7 @@ async function ensureMongoDB(): Promise<void> {
       // Dynamic import so production bundles never include the dev package.
       const { MongoMemoryServer } = await import('mongodb-memory-server');
       const mongod = await MongoMemoryServer.create({
-        instance: { dbName: 'keystone' },
+        instance: { dbName: 'keystone', launchTimeout: 60000 },
       });
       const baseUri = mongod.getUri();
       const embeddedUri = baseUri.endsWith('/')

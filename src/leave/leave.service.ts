@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, ForbiddenException, Injectable,
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { ApprovalsService } from '../approvals/approvals.service';
 import type { ApplyLeaveDto } from './dto/apply-leave.dto';
 import type { UpdateLeavePolicyDto } from './dto/update-leave-policy.dto';
 import {
@@ -26,6 +27,7 @@ export class LeaveService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
+    private readonly approvals: ApprovalsService,
   ) {}
 
   /**
@@ -197,6 +199,15 @@ export class LeaveService {
         status: 'PENDING',
       },
     });
+
+    await this.approvals.createApproval(
+      organizationId,
+      me.id,
+      'Leave',
+      created.id,
+      `${dto.type} Leave Request - ${me.firstName} ${me.lastName}`,
+      `Requested ${days} days from ${dto.startDate} to ${dto.endDate}. Reason: ${dto.reason.trim()}`
+    );
 
     const approverIds = await this.approverUserIds(organizationId, userId);
     if (approverIds.length) {

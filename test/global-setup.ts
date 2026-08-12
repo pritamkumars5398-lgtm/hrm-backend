@@ -5,6 +5,7 @@ export default async function globalSetup() {
   console.log('\n[Jest Setup] Starting MongoMemoryReplSet...');
   const replSet = await MongoMemoryReplSet.create({
     replSet: { dbName: 'keystone_test', count: 1 },
+    instanceOpts: [{ launchTimeout: 60000 }],
   });
 
   let uri = replSet.getUri();

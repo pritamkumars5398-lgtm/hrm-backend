@@ -14,6 +14,10 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { OrganizationsModule } from './organizations/organizations.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { UsersModule } from './users/users.module';
+import { RecruitmentModule } from './recruitment/recruitment.module';
+import { FormsModule } from './forms/forms.module';
+import { TimesheetsModule } from './timesheets/timesheets.module';
+import { AssetsModule } from './assets/assets.module';
 import { HealthController } from './health/health.controller';
 
 /**
@@ -39,6 +43,10 @@ import { HealthController } from './health/health.controller';
     ReportsModule,
     DashboardModule,
     NotificationsModule,
+    RecruitmentModule,
+    FormsModule,
+    TimesheetsModule,
+    AssetsModule,
   ],
   controllers: [HealthController],
 })

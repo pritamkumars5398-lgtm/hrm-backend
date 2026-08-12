@@ -6,10 +6,12 @@ async function main() {
   console.log('Starting Embedded MongoDB ReplicaSet...');
   const replSet = await MongoMemoryReplSet.create({
     replSet: { count: 1, storageEngine: 'wiredTiger' },
+    instanceOpts: [{ launchTimeout: 60000 }],
   });
   const uri = replSet.getUri() + 'keystone';
   process.env.MONGO_URI = uri;
   process.env.DATABASE_URL = uri;
+  process.env.EMBEDDED_MONGO_RUNNING = 'true';
 
   console.log(`ReplicaSet ready at ${uri}`);
 

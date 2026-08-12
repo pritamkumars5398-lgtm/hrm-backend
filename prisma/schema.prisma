@@ -359,6 +359,7 @@ model Timesheet {
   weekStartDate  String // YYYY-MM-DD
   status         String // DRAFT | SUBMITTED | APPROVED | REJECTED
   totalHours     Float    @default(0)
+  rowsJson       String   @default("[]") // JSON string of TimeRow details
   createdAt      DateTime @default(now())
 }
 
@@ -375,40 +376,64 @@ model Asset {
 }
 
 model ExpenseClaim {
-  id             String   @id @map("_id")
-  organizationId String
-  employeeId     String
-  title          String
-  category       String // Travel | Food | Fuel | Hotel | Miscellaneous
-  amount         Float
-  status         String // PENDING | APPROVED | REJECTED | REIMBURSED
-  receiptUrl     String?
-  createdAt      DateTime @default(now())
+  id              String   @id @map("_id")
+  organizationId  String
+  employeeId      String
+  title           String
+  category        String // Travel | Food | Fuel | Hotel | Miscellaneous
+  amount          Float
+  status          String // PENDING | APPROVED | REJECTED | REIMBURSED
+  receiptUrl      String?
+  claimDate       String // YYYY-MM-DD
+  rejectionReason String?
+  historyJson     String   @default("[]") // JSON audit history
+  createdAt       DateTime @default(now())
 }
 
 model TravelRequest {
-  id             String   @id @map("_id")
-  organizationId String
-  employeeId     String
-  destination    String
-  startDate      String
-  endDate        String
-  purpose        String
-  estimatedCost  Float
-  status         String // PENDING | APPROVED | BOOKED | REJECTED
-  createdAt      DateTime @default(now())
+  id                 String   @id @map("_id")
+  organizationId     String
+  employeeId         String
+  destination        String
+  startDate          String
+  endDate            String
+  purpose            String
+  estimatedCost      Float
+  status             String // PENDING | APPROVED | BOOKED | REJECTED | CANCELLED
+  bookingDetails     String?
+  expenseId          String? // Linked ExpenseClaim.id
+  cancellationReason String?
+  createdAt          DateTime @default(now())
 }
 
 model HelpdeskTicket {
-  id             String   @id @map("_id")
-  organizationId String
-  employeeId     String
-  subject        String
-  category       String // HR | IT | Finance | Admin
-  priority       String // LOW | MEDIUM | HIGH | URGENT
-  status         String // OPEN | IN_PROGRESS | RESOLVED | CLOSED
-  assignedToId   String?
-  createdAt      DateTime @default(now())
+  id              String   @id @map("_id")
+  organizationId  String
+  employeeId      String
+  subject         String
+  description     String
+  category        String // HR | IT | Finance | Admin
+  priority        String // LOW | MEDIUM | HIGH | URGENT
+  status          String // OPEN | IN_PROGRESS | RESOLVED | CLOSED
+  assignedToId    String?
+  resolution      String?
+  commentsJson    String   @default("[]") // comments/replies log
+  attachmentsJson String   @default("[]") // attachments log
+  createdAt       DateTime @default(now())
+}
+
+model ApprovalRequest {
+  id              String   @id @map("_id")
+  organizationId  String
+  requesterId     String
+  requesterName   String
+  sourceModule    String // Leave | Expense | Travel | Forms | Recruitment | Performance | Documents
+  sourceRecordId  String // e.g., LeaveRequest.id, ExpenseClaim.id
+  title           String
+  details         String
+  status          String // PENDING | APPROVED | REJECTED
+  rejectionReason String?
+  createdAt       DateTime @default(now())
 }
 
 model Course {
@@ -441,6 +466,15 @@ model FormDefinition {
   fieldsJson     String   // JSON string of fields
   status         String // DRAFT | PUBLISHED
   createdAt      DateTime @default(now())
+}
+
+model FormResponse {
+  id             String   @id @map("_id")
+  organizationId String
+  formId         String
+  respondentName String
+  answersJson    String   // JSON string of answers
+  submittedAt    DateTime @default(now())
 }
 
 model Tenant {

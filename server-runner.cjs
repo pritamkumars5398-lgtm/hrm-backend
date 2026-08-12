@@ -8,12 +8,13 @@ const DEMO_HASH = '$2b$10$S/JdXTN6BjYEEZaW0FBE5OXgZZ/LGyayrkC6fTZN28BhqIXAXAriC'
 async function main() {
   console.log('1. Starting Standalone MongoMemoryServer...');
   const mongod = await MongoMemoryServer.create({
-    instance: { dbName: 'keystone' },
+    instance: { dbName: 'keystone', launchTimeout: 60000 },
   });
 
   const uri = mongod.getUri() + 'keystone?directConnection=true';
   process.env.MONGO_URI = uri;
   process.env.DATABASE_URL = uri;
+  process.env.EMBEDDED_MONGO_RUNNING = 'true';
 
   console.log(`2. Connecting native driver to ${uri}...`);
   const client = new MongoClient(uri);
