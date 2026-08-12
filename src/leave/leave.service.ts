@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { ApprovalsService } from '../approvals/approvals.service';
+import { writeAuditLog } from '../common/audit-log';
 import type { ApplyLeaveDto } from './dto/apply-leave.dto';
 import type { UpdateLeavePolicyDto } from './dto/update-leave-policy.dto';
 import {
@@ -16,6 +17,30 @@ import {
   type PublicLeavePolicy,
   type PublicLeaveRequest,
 } from './leave.entity';
+
+export function calculateWorkingDays(
+  startDateStr: string,
+  endDateStr: string,
+  holidays: string[] = [],
+): number {
+  let count = 0;
+  const start = new Date(`${startDateStr}T00:00:00`);
+  const end = new Date(`${endDateStr}T00:00:00`);
+  
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    const dayOfWeek = d.getDay();
+    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6; // Sunday or Saturday
+    
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const isoDateStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    const isHoliday = holidays.includes(isoDateStr);
+    
+    if (!isWeekend && !isHoliday) {
+      count++;
+    }
+  }
+  return count;
+}
 
 /** Does this permission set grant company-wide leave approval? Mirrors PermissionsGuard's matching. */
 function canApprove(permissions: string[]): boolean {
@@ -116,21 +141,24 @@ export class LeaveService {
     entitlement: Record<LeaveType, number>,
   ): PublicLeaveBalance[] {
     const approved = employeeRequests.filter((r) => r.status === 'APPROVED');
+    const pending = employeeRequests.filter((r) => r.status === 'PENDING');
     return LEAVE_TYPES.map((type) => {
       const used = approved.filter((r) => r.type === type).reduce((sum, r) => sum + r.days, 0);
-      return { type, total: entitlement[type], used };
+      const pendingDays = pending.filter((r) => r.type === type).reduce((sum, r) => sum + r.days, 0);
+      return { type, total: entitlement[type], used, pending: pendingDays };
     });
   }
 
   private async balancesFor(employeeId: string, organizationId: string): Promise<PublicLeaveBalance[]> {
-    const [approved, entitlement] = await Promise.all([
-      this.prisma.leaveRequest.findMany({ where: { organizationId, employeeId, status: 'APPROVED' } }),
+    const [requests, entitlement] = await Promise.all([
+      this.prisma.leaveRequest.findMany({ where: { organizationId, employeeId, status: { in: ['APPROVED', 'PENDING'] } } }),
       this.entitlementFor(organizationId),
     ]);
-    return this.balancesFrom(approved, entitlement);
+    return this.balancesFrom(requests, entitlement);
   }
 
   async updatePolicy(
+    userId: string,
     organizationId: string,
     permissions: string[],
     patch: UpdateLeavePolicyDto,
@@ -149,6 +177,17 @@ export class LeaveService {
       select: { leaveAnnualDays: true, leaveSickDays: true, leavePersonalDays: true },
     });
 
+    // Write audit log
+    await writeAuditLog(this.prisma, {
+      organizationId,
+      userId,
+      action: 'UPDATE_POLICY',
+      resource: 'Organization',
+      resourceId: organizationId,
+      result: 'ALLOW',
+      details: patch,
+    });
+
     const entitlement = resolveEntitlement(updated);
     return { annual: entitlement.ANNUAL, sick: entitlement.SICK, personal: entitlement.PERSONAL };
   }
@@ -163,7 +202,31 @@ export class LeaveService {
       throw new BadRequestException('The end date cannot be before the start date.');
     }
 
-    const days = daysBetween(dto.startDate, dto.endDate);
+    let days: number;
+    const org = await this.prisma.organization.findUnique({
+      where: { id: organizationId },
+      select: { attendanceHolidays: true },
+    });
+    const holidays = org?.attendanceHolidays || [];
+
+    if (dto.isHalfDay) {
+      if (dto.startDate !== dto.endDate) {
+        throw new BadRequestException('A half-day leave request must start and end on the same day.');
+      }
+      // Check if start/end date falls on a weekend or holiday
+      const d = new Date(`${dto.startDate}T00:00:00`);
+      const dayOfWeek = d.getDay();
+      const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+      if (isWeekend || holidays.includes(dto.startDate)) {
+        throw new BadRequestException('You cannot request half-day leave on a weekend or holiday.');
+      }
+      days = 0.5;
+    } else {
+      days = calculateWorkingDays(dto.startDate, dto.endDate, holidays);
+      if (days === 0) {
+        throw new BadRequestException('The requested date range contains only non-working days (weekends/holidays).');
+      }
+    }
 
     if (dto.type !== 'UNPAID') {
       const [balance] = (await this.balancesFor(me.id, organizationId)).filter((b) => b.type === dto.type);
@@ -173,17 +236,24 @@ export class LeaveService {
       }
     }
 
-    const overlapping = await this.prisma.leaveRequest.findFirst({
+    // Overlap validation permitting parallel half-days
+    const existingRequests = await this.prisma.leaveRequest.findMany({
       where: {
         organizationId,
         employeeId: me.id,
-        status: { not: 'REJECTED' },
+        status: { notIn: ['REJECTED', 'CANCELLED'] },
         startDate: { lte: dto.endDate },
         endDate: { gte: dto.startDate },
       },
     });
-    if (overlapping) {
-      throw new ConflictException('You already have leave booked that overlaps those dates.');
+
+    for (const ext of existingRequests) {
+      if (!dto.isHalfDay || !ext.isHalfDay) {
+        throw new ConflictException('You already have leave booked that overlaps those dates.');
+      }
+      if (dto.startDate === ext.startDate && dto.halfDayPeriod === ext.halfDayPeriod) {
+        throw new ConflictException('You already have a half-day leave request booked for this period on this date.');
+      }
     }
 
     const created = await this.prisma.leaveRequest.create({
@@ -195,9 +265,22 @@ export class LeaveService {
         startDate: dto.startDate,
         endDate: dto.endDate,
         days,
+        isHalfDay: dto.isHalfDay || false,
+        halfDayPeriod: dto.halfDayPeriod || null,
         reason: dto.reason.trim(),
         status: 'PENDING',
       },
+    });
+
+    // Write audit log
+    await writeAuditLog(this.prisma, {
+      organizationId,
+      userId,
+      action: 'CREATE',
+      resource: 'LeaveRequest',
+      resourceId: created.id,
+      result: 'ALLOW',
+      details: { type: dto.type, startDate: dto.startDate, endDate: dto.endDate, days, isHalfDay: dto.isHalfDay },
     });
 
     await this.approvals.createApproval(
@@ -237,8 +320,9 @@ export class LeaveService {
     permissions: string[],
     id: string,
     decision: 'APPROVED' | 'REJECTED',
+    skipPermissionCheck = false,
   ): Promise<PublicLeaveRequest> {
-    if (!canApprove(permissions)) {
+    if (!skipPermissionCheck && !canApprove(permissions)) {
       throw new ForbiddenException('You do not have permission to decide on leave requests.');
     }
 
@@ -255,6 +339,20 @@ export class LeaveService {
       throw new ForbiddenException('You cannot decide on your own leave request.');
     }
 
+    if (decision === 'APPROVED' && request.type !== 'UNPAID') {
+      // Re-verify leave balance limits at decision time!
+      const balances = await this.balancesFor(request.employeeId, organizationId);
+      const balance = balances.find((b) => b.type === request.type);
+      if (balance) {
+        const remaining = balance.total - balance.used;
+        if (request.days > remaining) {
+          throw new BadRequestException(
+            `Employee only has ${remaining} days of ${request.type} leave left. Cannot approve.`,
+          );
+        }
+      }
+    }
+
     const updated = await this.prisma.leaveRequest.update({
       where: { id },
       data: { status: decision, decidedByUserId: userId, decidedAt: new Date() },
@@ -267,6 +365,17 @@ export class LeaveService {
 
     const decider = await this.prisma.user.findUnique({ where: { id: userId }, select: { name: true } });
 
+    // Write audit log
+    await writeAuditLog(this.prisma, {
+      organizationId,
+      userId,
+      action: 'DECIDE',
+      resource: 'LeaveRequest',
+      resourceId: id,
+      result: 'ALLOW',
+      details: { decision },
+    });
+
     await this.notifications.create({
       userId: employee.userId,
       organizationId,
@@ -277,5 +386,67 @@ export class LeaveService {
     });
 
     return toPublicRequest(updated, employee, decider?.name ?? null);
+  }
+
+  async cancel(userId: string, organizationId: string, id: string): Promise<PublicLeaveRequest> {
+    const request = await this.prisma.leaveRequest.findUnique({ where: { id } });
+    if (!request || request.organizationId !== organizationId) {
+      throw new NotFoundException('That request no longer exists.');
+    }
+
+    const me = await this.myEmployee(userId, organizationId);
+    if (!me || request.employeeId !== me.id) {
+      throw new ForbiddenException('You can only cancel your own leave requests.');
+    }
+
+    if (request.status === 'REJECTED' || request.status === 'CANCELLED') {
+      throw new BadRequestException('This request is already decided or cancelled.');
+    }
+
+    const prevStatus = request.status;
+
+    // Update status to CANCELLED
+    const updated = await this.prisma.leaveRequest.update({
+      where: { id },
+      data: { status: 'CANCELLED' },
+    });
+
+    // If it was PENDING, we should also cancel/remove the approval request if one exists
+    if (prevStatus === 'PENDING') {
+      const approval = await this.prisma.approvalRequest.findFirst({
+        where: { organizationId, sourceModule: 'Leave', sourceRecordId: id },
+      });
+      if (approval) {
+        await this.prisma.approvalRequest.update({
+          where: { id: approval.id },
+          data: { status: 'REJECTED' }, // mark as rejected/cancelled in approvals queue
+        });
+      }
+    }
+
+    // Write audit log
+    await writeAuditLog(this.prisma, {
+      organizationId,
+      userId,
+      action: 'CANCEL',
+      resource: 'LeaveRequest',
+      resourceId: id,
+      result: 'ALLOW',
+      details: { prevStatus },
+    });
+
+    // Notify managers
+    const approverIds = await this.approverUserIds(organizationId, userId);
+    if (approverIds.length) {
+      await this.notifications.createForMany(approverIds, {
+        organizationId,
+        title: 'Leave request cancelled',
+        body: `${me.firstName} ${me.lastName} cancelled their ${request.type.toLowerCase()} leave request from ${request.startDate} to ${request.endDate}.`,
+        kind: 'leave',
+        link: '/dashboard/leave',
+      });
+    }
+
+    return toPublicRequest(updated, me, null);
   }
 }

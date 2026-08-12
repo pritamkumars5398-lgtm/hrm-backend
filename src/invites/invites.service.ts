@@ -76,6 +76,8 @@ export class InvitesService {
     employmentType?: string;
     workLocation?: string;
     employeeId?: string;
+    dob?: string;
+    gender?: string;
     contactNumber?: string;
     homeAddress?: string;
     photoUrl?: string;
@@ -158,6 +160,8 @@ export class InvitesService {
             employmentType: params.employmentType || existingEmployee.employmentType,
             workLocation: params.workLocation || existingEmployee.workLocation,
             photoUrl: params.photoUrl ?? existingEmployee.photoUrl,
+            dob: params.dob ?? existingEmployee.dob,
+            gender: params.gender ?? existingEmployee.gender,
           },
         });
       } else if (!existingEmployee) {
@@ -177,6 +181,8 @@ export class InvitesService {
             employmentType: params.employmentType || '',
             workLocation: params.workLocation || '',
             photoUrl: params.photoUrl || null,
+            dob: params.dob || null,
+            gender: params.gender || null,
             ...(params.financialDetails ? { financialDetails: params.financialDetails } : {}),
             ...(params.educationDetails?.length ? { educationDetails: params.educationDetails } : {}),
             ...(params.familyDetails?.length ? { familyDetails: params.familyDetails } : {}),

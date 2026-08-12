@@ -301,4 +301,49 @@ describe('Attendance Module (e2e)', () => {
       expect(updatedReports.body.avgAttendance).toBeGreaterThan(initialAvgAttendance);
     });
   });
+
+  describe('Attendance Correction Workflow (Centralized Approvals)', () => {
+    it('allows employee to submit correction request', async () => {
+      await request(server())
+        .post('/attendance/correction')
+        .set('Cookie', employeeCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .send({
+          date: '2026-08-05',
+          checkIn: '09:00',
+          checkOut: '17:00',
+          reason: 'Forgot to punch in and out',
+        })
+        .expect(200);
+
+      // Verify that a pending ApprovalRequest was created
+      const pending = await request(server())
+        .get('/approvals/pending')
+        .set('Cookie', ownerCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .expect(200);
+
+      const correctionReq = pending.body.find(
+        (a: any) => a.sourceModule === 'Attendance' && a.requesterId === 'emp-4',
+      );
+      expect(correctionReq).toBeDefined();
+      expect(correctionReq.status).toBe('PENDING');
+
+      // Decide on approval (approve it)
+      await request(server())
+        .patch(`/approvals/${correctionReq.id}/decide`)
+        .set('Cookie', ownerCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .send({ status: 'APPROVED' })
+        .expect(200);
+
+      // Verify that AttendanceRecord is created/updated in the database
+      const record = await prisma.attendanceRecord.findFirst({
+        where: { organizationId: 'org-alderway', employeeId: 'emp-4', date: '2026-08-05' },
+      });
+      expect(record).toBeDefined();
+      expect(record?.checkIn).not.toBeNull();
+      expect(record?.checkOut).not.toBeNull();
+    });
+  });
 });

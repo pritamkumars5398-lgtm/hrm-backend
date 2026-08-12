@@ -1,6 +1,7 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import type { CreateFormDto, SubmitResponseDto } from './dto/forms.dto';
 
 function canManage(permissions: string[]): boolean {
@@ -9,7 +10,10 @@ function canManage(permissions: string[]): boolean {
 
 @Injectable()
 export class FormsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notifications: NotificationsService,
+  ) {}
 
   async createForm(organizationId: string, permissions: string[], dto: CreateFormDto) {
     if (!canManage(permissions)) {
@@ -160,5 +164,32 @@ export class FormsService {
         answers,
       };
     });
+  }
+
+  async assignForm(id: string, organizationId: string, permissions: string[], employeeId: string) {
+    if (!canManage(permissions)) {
+      throw new ForbiddenException('You do not have permission to manage forms.');
+    }
+
+    const form = await this.prisma.formDefinition.findUnique({ where: { id } });
+    if (!form || form.organizationId !== organizationId) {
+      throw new NotFoundException('Form not found.');
+    }
+
+    const employee = await this.prisma.employee.findUnique({ where: { id: employeeId } });
+    if (!employee || employee.organizationId !== organizationId || employee.deletedAt) {
+      throw new NotFoundException('Employee not found.');
+    }
+
+    await this.notifications.create({
+      userId: employee.userId,
+      organizationId,
+      title: 'New form assigned',
+      body: `Please fill out the form: "${form.title}"`,
+      kind: 'form',
+      link: '/dashboard/forms/my-forms',
+    });
+
+    return { success: true };
   }
 }

@@ -51,7 +51,7 @@ export class LeaveController {
     @Body() dto: UpdateLeavePolicyDto,
   ): Promise<PublicLeavePolicy> {
     const membership = requireMembership(m);
-    return this.leaveService.updatePolicy(membership.organizationId, membership.permissions, dto);
+    return this.leaveService.updatePolicy(membership.userId, membership.organizationId, membership.permissions, dto);
   }
 
   @Post(':id/decide')
@@ -63,5 +63,15 @@ export class LeaveController {
   ): Promise<PublicLeaveRequest> {
     const membership = requireMembership(m);
     return this.leaveService.decide(membership.userId, membership.organizationId, membership.permissions, id, decision);
+  }
+
+  @Post(':id/cancel')
+  @HttpCode(200)
+  async cancel(
+    @CurrentMembership() m: Membership | undefined,
+    @Param('id') id: string,
+  ): Promise<PublicLeaveRequest> {
+    const membership = requireMembership(m);
+    return this.leaveService.cancel(membership.userId, membership.organizationId, id);
   }
 }

@@ -1,4 +1,4 @@
-import { IsEmail, IsIn, IsOptional, IsString, MinLength, ValidateIf } from 'class-validator';
+import { IsEmail, IsIn, IsOptional, IsString, MinLength, ValidateIf, IsNumber, IsArray } from 'class-validator';
 import { INDUSTRIES } from '../organization.entity';
 
 export class UpdateOrganizationDto {
@@ -22,7 +22,25 @@ export class UpdateOrganizationDto {
   @ValidateIf((o) => o.leaveNotificationEmail !== '')
   @IsEmail({}, { message: 'That does not look like an email.' })
   leaveNotificationEmail?: string;
+
+  @IsOptional()
+  @IsString()
+  attendanceLateThreshold?: string;
+
+  @IsOptional()
+  @IsNumber()
+  attendanceHalfDayThreshold?: number;
+
+  @IsOptional()
+  @IsNumber()
+  attendanceWorkingHours?: number;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  attendanceHolidays?: string[];
 }
+
 
 export class CreateOrganizationDto {
   @IsString()

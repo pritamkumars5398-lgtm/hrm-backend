@@ -1,10 +1,11 @@
-import { BadRequestException, Controller, Get, HttpCode, Post, Query, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, HttpCode, Post, Query, UseGuards } from '@nestjs/common';
 import { AttendanceService } from './attendance.service';
 import { JwtAuthGuard } from '../common/jwt-auth.guard';
 import { PermissionsGuard } from '../common/permissions.guard';
 import { CurrentMembership } from '../common/current-membership.decorator';
 import type { Membership } from '../users/user.entity';
 import type { PublicAttendanceMonth } from './attendance.entity';
+import { AttendanceCorrectionDto } from './dto/attendance-correction.dto';
 
 /** No `@RequirePermission` on this controller's endpoints means the guard never
  *  requires `request.membership` to be set — same gap `organizations.controller.ts`
@@ -60,5 +61,16 @@ export class AttendanceController {
       month: Number(month),
       selectedDate,
     });
+  }
+
+  @Post('correction')
+  @HttpCode(200)
+  async requestCorrection(
+    @CurrentMembership() m: Membership | undefined,
+    @Body() dto: AttendanceCorrectionDto,
+  ): Promise<{ ok: true }> {
+    const membership = requireMembership(m);
+    await this.attendanceService.requestCorrection(membership.userId, membership.organizationId, dto);
+    return { ok: true };
   }
 }

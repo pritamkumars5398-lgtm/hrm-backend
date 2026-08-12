@@ -65,7 +65,16 @@ export class OrganizationsService implements OnModuleInit {
   /** Company profile edits from Settings. Owner-only — enforced at the controller. */
   async update(
     id: string,
-    patch: { name?: string; address?: string; industry?: string; leaveNotificationEmail?: string },
+    patch: {
+      name?: string;
+      address?: string;
+      industry?: string;
+      leaveNotificationEmail?: string;
+      attendanceLateThreshold?: string;
+      attendanceHalfDayThreshold?: number;
+      attendanceWorkingHours?: number;
+      attendanceHolidays?: string[];
+    },
   ): Promise<Organization> {
     return (await this.prisma.organization.update({
       where: { id },
@@ -78,6 +87,10 @@ export class OrganizationsService implements OnModuleInit {
         ...(patch.leaveNotificationEmail !== undefined
           ? { leaveNotificationEmail: patch.leaveNotificationEmail.trim() || null }
           : {}),
+        ...(patch.attendanceLateThreshold !== undefined ? { attendanceLateThreshold: patch.attendanceLateThreshold } : {}),
+        ...(patch.attendanceHalfDayThreshold !== undefined ? { attendanceHalfDayThreshold: patch.attendanceHalfDayThreshold } : {}),
+        ...(patch.attendanceWorkingHours !== undefined ? { attendanceWorkingHours: patch.attendanceWorkingHours } : {}),
+        ...(patch.attendanceHolidays !== undefined ? { attendanceHolidays: patch.attendanceHolidays } : {}),
       },
     })) as Organization;
   }

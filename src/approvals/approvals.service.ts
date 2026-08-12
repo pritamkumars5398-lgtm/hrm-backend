@@ -2,6 +2,8 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { ModuleRef } from '@nestjs/core';
+import { LeaveService } from '../leave/leave.service';
 import type { DecideApprovalDto } from './dto/approvals.dto';
 
 function canDecide(permissions: string[]): boolean {
@@ -13,6 +15,7 @@ export class ApprovalsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
+    private readonly moduleRef: ModuleRef,
   ) {}
 
   async createApproval(
@@ -117,17 +120,15 @@ export class ApprovalsService {
 
     try {
       if (sourceModule === 'Leave') {
-        const leave = await this.prisma.leaveRequest.findUnique({ where: { id: sourceRecordId } });
-        if (leave && leave.status === 'PENDING') {
-          await this.prisma.leaveRequest.update({
-            where: { id: sourceRecordId },
-            data: {
-              status: dto.status,
-              decidedByUserId: userId,
-              decidedAt: new Date(),
-            },
-          });
-        }
+        const leaveService = this.moduleRef.get(LeaveService, { strict: false });
+        await leaveService.decide(
+          userId,
+          organizationId,
+          permissions,
+          sourceRecordId,
+          dto.status === 'APPROVED' ? 'APPROVED' : 'REJECTED',
+          true,
+        );
       } else if (sourceModule === 'Expense') {
         const expense = await this.prisma.expenseClaim.findUnique({ where: { id: sourceRecordId } });
         if (expense && expense.status === 'PENDING') {
@@ -168,6 +169,41 @@ export class ApprovalsService {
               status: dto.status === 'APPROVED' ? 'PUBLISHED' : 'CLOSED',
             },
           });
+        }
+      } else if (sourceModule === 'Attendance') {
+        if (dto.status === 'APPROVED') {
+          const details = JSON.parse(request.details || '{}');
+          const dateStr = details.date;
+          const checkInStr = details.checkIn;
+          const checkOutStr = details.checkOut;
+
+          const checkInDate = new Date(`${dateStr}T${checkInStr || '09:00'}:00`);
+          const checkOutDate = checkOutStr ? new Date(`${dateStr}T${checkOutStr}:00`) : null;
+
+          const existingRecord = await this.prisma.attendanceRecord.findFirst({
+            where: { organizationId, employeeId: request.requesterId, date: dateStr },
+          });
+
+          if (existingRecord) {
+            await this.prisma.attendanceRecord.update({
+              where: { id: existingRecord.id },
+              data: {
+                checkIn: checkInDate,
+                checkOut: checkOutDate,
+              },
+            });
+          } else {
+            await this.prisma.attendanceRecord.create({
+              data: {
+                id: sourceRecordId && sourceRecordId !== 'new-att' ? sourceRecordId : `att-${randomUUID().slice(0, 8)}`,
+                organizationId,
+                employeeId: request.requesterId,
+                date: dateStr,
+                checkIn: checkInDate,
+                checkOut: checkOutDate,
+              },
+            });
+          }
         }
       }
     } catch (err) {

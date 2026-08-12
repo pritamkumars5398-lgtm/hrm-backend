@@ -18,6 +18,10 @@ import { RecruitmentModule } from './recruitment/recruitment.module';
 import { FormsModule } from './forms/forms.module';
 import { TimesheetsModule } from './timesheets/timesheets.module';
 import { AssetsModule } from './assets/assets.module';
+import { ApprovalsModule } from './approvals/approvals.module';
+import { ExpensesModule } from './expenses/expenses.module';
+import { TravelModule } from './travel/travel.module';
+import { HelpdeskModule } from './helpdesk/helpdesk.module';
 import { HealthController } from './health/health.controller';
 
 /**
@@ -47,6 +51,10 @@ import { HealthController } from './health/health.controller';
     FormsModule,
     TimesheetsModule,
     AssetsModule,
+    ApprovalsModule,
+    ExpensesModule,
+    TravelModule,
+    HelpdeskModule,
   ],
   controllers: [HealthController],
 })

@@ -71,6 +71,8 @@ model Employee {
   startDate        DateTime
   employmentType   String
   workLocation     String
+  dob              String?
+  gender           String?
   financialDetails FinancialDetails?
   educationDetails EducationDetail[]
   familyDetails    FamilyDetail[]
@@ -117,7 +119,14 @@ model Organization {
   // Day-of-month range, used when RANGE — e.g. 1-7 for "first week".
   payCycleRangeStart Int?
   payCycleRangeEnd   Int?
+
+  // Attendance Rules / Configuration
+  attendanceLateThreshold    String?  @default("09:30")
+  attendanceHalfDayThreshold Float?   @default(5.0)
+  attendanceWorkingHours     Float?   @default(8.0)
+  attendanceHolidays         String[] @default([])
 }
+
 
 model Invite {
   id             String   @id @map("_id")
@@ -316,9 +325,11 @@ model LeaveRequest {
   // Plain YYYY-MM-DD — inclusive range, no time-of-day meaning for a leave day.
   startDate       String
   endDate         String
-  days            Int
+  days            Float
+  isHalfDay       Boolean   @default(false)
+  halfDayPeriod   String?   // FIRST_HALF | SECOND_HALF
   reason          String
-  status          String // PENDING | APPROVED | REJECTED
+  status          String // PENDING | APPROVED | REJECTED | CANCELLED
   requestedAt     DateTime  @default(now())
   decidedByUserId String?
   decidedAt       DateTime?

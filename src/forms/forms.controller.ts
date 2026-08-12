@@ -60,4 +60,14 @@ export class FormsController {
     const membership = requireMembership(m);
     return this.formsService.listResponses(id, membership.organizationId, membership.permissions);
   }
+
+  @Post(':id/assign')
+  async assignForm(
+    @CurrentMembership() m: Membership | undefined,
+    @Param('id') id: string,
+    @Body() dto: { employeeId: string },
+  ) {
+    const membership = requireMembership(m);
+    return this.formsService.assignForm(id, membership.organizationId, membership.permissions, dto.employeeId);
+  }
 }

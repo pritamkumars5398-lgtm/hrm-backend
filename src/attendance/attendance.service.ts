@@ -3,6 +3,9 @@ import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { hhmm, toPublicRecord, type DaySummary, type PublicAttendanceMonth } from './attendance.entity';
 import type { LeaveType } from '../leave/leave.entity';
+import { ApprovalsService } from '../approvals/approvals.service';
+import { writeAuditLog } from '../common/audit-log';
+import type { AttendanceCorrectionDto } from './dto/attendance-correction.dto';
 
 const pad = (n: number) => String(n).padStart(2, '0');
 const isoDate = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -15,7 +18,10 @@ function canManage(permissions: string[]): boolean {
 
 @Injectable()
 export class AttendanceService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly approvalsService: ApprovalsService,
+  ) {}
 
   /** Resolves the caller's own Employee record in this org, or null if they have none. */
   private async myEmployee(userId: string, organizationId: string) {
@@ -53,6 +59,17 @@ export class AttendanceService {
         },
       });
     }
+
+    // Write audit log
+    await writeAuditLog(this.prisma, {
+      organizationId,
+      userId,
+      action: 'CREATE',
+      resource: 'AttendanceRecord',
+      resourceId: today,
+      result: 'ALLOW',
+      details: { info: 'Checked in successfully.' }
+    });
   }
 
   async checkOut(userId: string, organizationId: string): Promise<void> {
@@ -74,6 +91,67 @@ export class AttendanceService {
     }
 
     await this.prisma.attendanceRecord.update({ where: { id: existing.id }, data: { checkOut: new Date() } });
+
+    // Write audit log
+    await writeAuditLog(this.prisma, {
+      organizationId,
+      userId,
+      action: 'UPDATE',
+      resource: 'AttendanceRecord',
+      resourceId: today,
+      result: 'ALLOW',
+      details: { info: 'Checked out successfully.' }
+    });
+  }
+
+  async requestCorrection(userId: string, organizationId: string, dto: AttendanceCorrectionDto): Promise<void> {
+    const employee = await this.myEmployee(userId, organizationId);
+    if (!employee) {
+      throw new NotFoundException('No employee record found for you in this company — ask your Owner or HR to add one.');
+    }
+
+    // Check if there is already a pending correction for this employee and date
+    const pendingCorrection = await this.prisma.approvalRequest.findFirst({
+      where: {
+        organizationId,
+        requesterId: employee.id,
+        sourceModule: 'Attendance',
+        status: 'PENDING',
+        details: { contains: dto.date }
+      }
+    });
+
+    if (pendingCorrection) {
+      throw new ConflictException('You already have a pending correction request for this date.');
+    }
+
+    // Find the recordId if one already exists
+    const existing = await this.prisma.attendanceRecord.findFirst({
+      where: { organizationId, employeeId: employee.id, date: dto.date }
+    });
+
+    const sourceRecordId = existing ? existing.id : 'new-att';
+
+    // Create the centralized approval request
+    await this.approvalsService.createApproval(
+      organizationId,
+      employee.id,
+      'Attendance',
+      sourceRecordId,
+      `Attendance Correction: ${dto.date}`,
+      JSON.stringify(dto),
+    );
+
+    // Audit log
+    await writeAuditLog(this.prisma, {
+      organizationId,
+      userId,
+      action: 'CREATE',
+      resource: 'ApprovalRequest',
+      resourceId: sourceRecordId,
+      result: 'ALLOW',
+      details: { info: 'Requested attendance correction.', payload: dto }
+    });
   }
 
   /**
@@ -92,9 +170,15 @@ export class AttendanceService {
     const { organizationId, year, month } = params;
     const manage = canManage(params.permissions);
 
-    const allEmployees = await this.prisma.employee.findMany({
-      where: { organizationId },
-    });
+    const [organization, allEmployees] = await Promise.all([
+      this.prisma.organization.findUnique({ where: { id: organizationId } }),
+      this.prisma.employee.findMany({ where: { organizationId } }),
+    ]);
+
+    const lateThreshold = organization?.attendanceLateThreshold || '09:30';
+    const halfDayThreshold = organization?.attendanceHalfDayThreshold ?? 5.0;
+    const holidays = organization?.attendanceHolidays || [];
+
     let employees = allEmployees.filter((e) => !e.deletedAt);
 
     if (!manage) {
@@ -121,11 +205,17 @@ export class AttendanceService {
           where: { organizationId, employeeId: { in: employeeIds }, status: 'APPROVED', startDate: { lte: monthEnd }, endDate: { gte: monthStart } },
         })
       : [];
-    const leaveByKey = new Map<string, string>();
+    const leaveByKey = new Map<string, { type: string; isHalfDay: boolean; period: string | null }>();
     for (const req of approvedLeave) {
       for (let d = new Date(`${req.startDate}T00:00:00`); isoDate(d) <= req.endDate; d.setDate(d.getDate() + 1)) {
         const iso = isoDate(d);
-        if (iso >= monthStart && iso <= monthEnd) leaveByKey.set(`${req.employeeId}:${iso}`, req.type);
+        if (iso >= monthStart && iso <= monthEnd) {
+          leaveByKey.set(`${req.employeeId}:${iso}`, {
+            type: req.type,
+            isHalfDay: req.isHalfDay,
+            period: req.halfDayPeriod,
+          });
+        }
       }
     }
 
@@ -173,7 +263,10 @@ export class AttendanceService {
     for (let day = 1; day <= daysInMonth; day++) {
       const date = new Date(year, month, day);
       const iso = `${year}-${pad(month + 1)}-${pad(day)}`;
-      if (isWeekend(date)) continue; // weekends carry no rows at all — a deliberate simplification.
+      const weekend = isWeekend(date);
+      const holiday = holidays.includes(iso);
+
+      if (weekend) continue; // weekends carry no rows at all — a deliberate simplification.
       // Never synthesize a verdict for today or the future — "no record yet" is not the same as absent.
       if (iso >= todayISO) continue;
 
@@ -186,7 +279,11 @@ export class AttendanceService {
           raw ?? { id: `absent-${employee.id}-${iso}`, organizationId, employeeId: employee.id, date: iso, checkIn: null, checkOut: null },
           employee,
           null,
-          leaveByKey.has(`${employee.id}:${iso}`),
+          leaveByKey.get(`${employee.id}:${iso}`),
+          lateThreshold,
+          halfDayThreshold,
+          weekend,
+          holiday,
         );
 
         const bucket = byDate.get(iso) ?? [];
@@ -201,15 +298,20 @@ export class AttendanceService {
     // today" correctly shows leave, not silence).
     for (const employee of employees) {
       const raw = recordByKey.get(`${employee.id}:${todayISO}`);
-      const onLeaveToday = leaveByKey.has(`${employee.id}:${todayISO}`);
-      if (raw?.checkIn || onLeaveToday) {
+      const leaveToday = leaveByKey.get(`${employee.id}:${todayISO}`);
+      const holidayToday = holidays.includes(todayISO);
+      if (raw?.checkIn || leaveToday || holidayToday) {
         const bucket = byDate.get(todayISO) ?? [];
         bucket.push(
           toPublicRecord(
             raw ?? { id: `leave-${employee.id}-${todayISO}`, organizationId, employeeId: employee.id, date: todayISO, checkIn: null, checkOut: null },
             employee,
             null,
-            onLeaveToday,
+            leaveToday,
+            lateThreshold,
+            halfDayThreshold,
+            isWeekend(new Date()),
+            holidayToday,
           ),
         );
         byDate.set(todayISO, bucket);
@@ -224,9 +326,11 @@ export class AttendanceService {
         const halfDay = rows.filter((r) => r.status === 'HALF_DAY').length;
         const absent = rows.filter((r) => r.status === 'ABSENT').length;
         const leave = rows.filter((r) => r.status === 'LEAVE').length;
-        // Approved leave is excluded from the rate entirely — it isn't a failure
-        // to attend, so it shouldn't drag the heat-map down.
-        const expected = rows.length - leave;
+        const holiday = rows.filter((r) => r.status === 'HOLIDAY').length;
+
+        // Approved leave and holidays are excluded from the rate entirely — they aren't a failure
+        // to attend, so they shouldn't drag the heat-map down.
+        const expected = rows.length - leave - holiday;
         const attended = present + late + halfDay;
 
         return {
@@ -250,8 +354,8 @@ export class AttendanceService {
     const workedToday = today.filter((r) => r.hours > 0);
     const avgHours =
       workedToday.length === 0
-        ? 0
-        : Math.round((workedToday.reduce((sum, r) => sum + r.hours, 0) / workedToday.length) * 10) / 10;
+          ? 0
+          : Math.round((workedToday.reduce((sum, r) => sum + r.hours, 0) / workedToday.length) * 10) / 10;
 
     return {
       year,

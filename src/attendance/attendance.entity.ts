@@ -1,6 +1,6 @@
 import type { LeaveType } from '../leave/leave.entity';
 
-export type AttendanceStatus = 'PRESENT' | 'LATE' | 'HALF_DAY' | 'ABSENT' | 'LEAVE';
+export type AttendanceStatus = 'PRESENT' | 'LATE' | 'HALF_DAY' | 'ABSENT' | 'LEAVE' | 'WEEKEND' | 'HOLIDAY';
 
 export type PublicAttendanceRecord = {
   id: string;
@@ -72,12 +72,30 @@ export function hhmm(d: Date): string {
 }
 
 /** Derives status + worked hours from raw check-in/out timestamps. Never stored — always computed. */
-export function deriveStatus(checkIn: Date, checkOut: Date | null): { status: AttendanceStatus; hours: number } {
+export function deriveStatus(
+  checkIn: Date,
+  checkOut: Date | null,
+  lateThresholdStr?: string | null,
+  halfDayThreshold?: number | null,
+  isLeaveHalfDay?: boolean,
+): { status: AttendanceStatus; hours: number } {
+  let lateCutoff = 9 * 60 + 30; // 09:30
+  if (lateThresholdStr) {
+    const [h, m] = lateThresholdStr.split(':').map(Number);
+    if (!isNaN(h) && !isNaN(m)) {
+      lateCutoff = h * 60 + m;
+    }
+  }
+  let halfDayHours = halfDayThreshold ?? 5;
+  if (isLeaveHalfDay) {
+    halfDayHours = halfDayHours / 2; // e.g. 2.5 hours
+  }
+
   const minutesOfDay = checkIn.getHours() * 60 + checkIn.getMinutes();
-  const late = minutesOfDay > LATE_CUTOFF_MINUTES;
+  const late = minutesOfDay > lateCutoff;
   const hours = checkOut ? Math.round(((checkOut.getTime() - checkIn.getTime()) / 3600000) * 10) / 10 : 0;
 
-  if (checkOut && hours < HALF_DAY_HOURS_THRESHOLD) {
+  if (checkOut && hours < halfDayHours) {
     return { status: 'HALF_DAY', hours };
   }
   return { status: late ? 'LATE' : 'PRESENT', hours };
@@ -88,12 +106,24 @@ export function toPublicRecord(
   employee: { firstName: string; lastName: string; department: string },
   managerName: string | null,
   /** Approved leave covering this exact day, if any — takes priority over "no check-in = absent". */
-  onLeave?: boolean,
+  onLeave?: boolean | { type: string; isHalfDay: boolean; period?: string | null } | null,
+  lateThresholdStr?: string | null,
+  halfDayThreshold?: number | null,
+  isWeekend?: boolean,
+  isHoliday?: boolean,
 ): PublicAttendanceRecord {
   const name = `${employee.firstName} ${employee.lastName}`.trim();
   const initials = ((employee.firstName[0] ?? '') + (employee.lastName[0] ?? '')).toUpperCase() || '?';
 
+  const hasLeave = Boolean(onLeave);
+  const isLeaveHalfDay = typeof onLeave === 'object' && onLeave !== null && onLeave.isHalfDay;
+
   if (!record.checkIn) {
+    let status: AttendanceStatus = 'ABSENT';
+    if (hasLeave) status = isLeaveHalfDay ? 'HALF_DAY' : 'LEAVE';
+    else if (isHoliday) status = 'HOLIDAY';
+    else if (isWeekend) status = 'WEEKEND';
+
     return {
       id: record.id,
       organizationId: record.organizationId,
@@ -103,14 +133,14 @@ export function toPublicRecord(
       department: employee.department,
       managerName,
       date: record.date,
-      status: onLeave ? 'LEAVE' : 'ABSENT',
+      status,
       clockIn: null,
       clockOut: null,
       hours: 0,
     };
   }
 
-  const { status, hours } = deriveStatus(record.checkIn, record.checkOut);
+  const { status, hours } = deriveStatus(record.checkIn, record.checkOut, lateThresholdStr, halfDayThreshold, isLeaveHalfDay);
 
   return {
     id: record.id,

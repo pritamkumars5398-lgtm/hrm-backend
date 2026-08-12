@@ -31,6 +31,8 @@ export type PublicEmployee = {
   employeeId: string;
   homeAddress: string;
   managerId: string | null;
+  dob?: string | null;
+  gender?: string | null;
 };
 
 function initialsOf(first: string, last: string): string {
@@ -98,5 +100,7 @@ export function toPublicEmployee(
     employeeId: employee.employeeId ?? '',
     homeAddress: employee.homeAddress ?? '',
     managerId: employee.managerId ?? null,
+    dob: (employee as any).dob ?? null,
+    gender: (employee as any).gender ?? null,
   };
 }

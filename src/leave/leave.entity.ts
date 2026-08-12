@@ -37,6 +37,7 @@ export type PublicLeaveBalance = {
   type: LeaveType;
   total: number;
   used: number;
+  pending: number;
 };
 
 export type PublicLeaveRequest = {
@@ -51,6 +52,8 @@ export type PublicLeaveRequest = {
   startDate: string;
   endDate: string;
   days: number;
+  isHalfDay: boolean;
+  halfDayPeriod: string | null;
   reason: string;
   status: LeaveStatus;
   requestedAt: string;
@@ -92,6 +95,8 @@ export function toPublicRequest(
     startDate: string;
     endDate: string;
     days: number;
+    isHalfDay: boolean;
+    halfDayPeriod: string | null;
     reason: string;
     status: string;
     requestedAt: Date;
@@ -116,6 +121,8 @@ export function toPublicRequest(
     startDate: record.startDate,
     endDate: record.endDate,
     days: record.days,
+    isHalfDay: record.isHalfDay,
+    halfDayPeriod: record.halfDayPeriod,
     reason: record.reason,
     status: record.status as LeaveStatus,
     requestedAt: record.requestedAt.toISOString().slice(0, 10),

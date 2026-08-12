@@ -86,6 +86,14 @@ export class CreateInviteDto {
 
   @IsString()
   @IsOptional()
+  dob?: string;
+
+  @IsString()
+  @IsOptional()
+  gender?: string;
+
+  @IsString()
+  @IsOptional()
   contactNumber?: string;
 
   @IsString()

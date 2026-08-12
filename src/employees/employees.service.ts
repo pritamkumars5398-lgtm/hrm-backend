@@ -175,6 +175,8 @@ export class EmployeesService {
     if (patch.department !== undefined) data.department = patch.department;
     if (patch.employmentType !== undefined) data.employmentType = patch.employmentType;
     if (patch.workLocation !== undefined) data.workLocation = patch.workLocation;
+    if (patch.dob !== undefined) data.dob = patch.dob;
+    if (patch.gender !== undefined) data.gender = patch.gender;
     if (patch.startDate) data.startDate = new Date(patch.startDate);
     if (patch.managerId !== undefined) {
       // A manager must be a real, active employee in the same company — and

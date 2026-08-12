@@ -1,4 +1,4 @@
-const { MongoMemoryServer } = require('mongodb-memory-server');
+const { MongoMemoryReplSet } = require('mongodb-memory-server');
 const { MongoClient } = require('mongodb');
 const bcrypt = require('bcrypt');
 
@@ -6,15 +6,27 @@ const bcrypt = require('bcrypt');
 const DEMO_HASH = '$2b$10$S/JdXTN6BjYEEZaW0FBE5OXgZZ/LGyayrkC6fTZN28BhqIXAXAriC';
 
 async function main() {
-  console.log('1. Starting Standalone MongoMemoryServer...');
-  const mongod = await MongoMemoryServer.create({
-    instance: { dbName: 'keystone', launchTimeout: 60000 },
+  console.log('1. Starting MongoMemoryReplSet...');
+  const replSet = await MongoMemoryReplSet.create({
+    replSet: { dbName: 'keystone', count: 1 },
+    instanceOpts: [{ launchTimeout: 60000 }],
   });
 
-  const uri = mongod.getUri() + 'keystone?directConnection=true';
+  let uri = replSet.getUri();
+  if (uri.includes('/?')) {
+    uri = uri.replace('/?', '/keystone?');
+  } else if (uri.endsWith('/')) {
+    uri = uri + 'keystone';
+  } else {
+    uri = uri + '/keystone';
+  }
+
   process.env.MONGO_URI = uri;
   process.env.DATABASE_URL = uri;
   process.env.EMBEDDED_MONGO_RUNNING = 'true';
+
+  console.log('Waiting 5 seconds for ReplicaSet election...');
+  await new Promise((resolve) => setTimeout(resolve, 5000));
 
   console.log(`2. Connecting native driver to ${uri}...`);
   const client = new MongoClient(uri);
@@ -390,7 +402,7 @@ async function main() {
     reason: 'Family event travel.',
     status: 'APPROVED',
     days: 2,
-    appliedAt: new Date('2026-08-01T10:00:00.000Z'),
+    requestedAt: new Date('2026-08-01T10:00:00.000Z'),
     decidedAt: new Date('2026-08-02T11:00:00.000Z'),
     decidedByUserId: 'usr-1',
   });

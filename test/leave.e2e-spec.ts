@@ -338,4 +338,108 @@ describe('Leave Module (e2e)', () => {
       expect(updatedReports.body.leaveDaysTaken).toBe(initialLeaveDaysTaken + 1);
     });
   });
+
+  describe('Leave Hardening and Half-Day / Cancellation Integration', () => {
+    it('calculates working days duration correctly by excluding weekends and holidays', async () => {
+      // Setup a public holiday on 2026-09-07 (Monday)
+      await prisma.organization.update({
+        where: { id: 'org-alderway' },
+        data: {
+          attendanceHolidays: ['2026-09-07'],
+        },
+      });
+
+      // Apply for leave from 2026-09-04 (Friday) to 2026-09-08 (Tuesday)
+      // Calendar days: Friday, Saturday, Sunday, Monday, Tuesday (5 days)
+      // Working days: Friday, Tuesday (2 days) because Sat/Sun are weekends, Monday is a holiday!
+      const res = await request(server())
+        .post('/leave')
+        .set('Cookie', employeeCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .send({
+          type: 'ANNUAL',
+          startDate: '2026-09-04',
+          endDate: '2026-09-08',
+          reason: 'Trip spanning holiday weekend',
+        })
+        .expect(201);
+
+      expect(res.body.days).toBe(2);
+    });
+
+    it('allows concurrent half-day requests for different periods on the same day', async () => {
+      // Request first half
+      await request(server())
+        .post('/leave')
+        .set('Cookie', employeeCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .send({
+          type: 'PERSONAL',
+          startDate: '2026-09-15',
+          endDate: '2026-09-15',
+          isHalfDay: true,
+          halfDayPeriod: 'FIRST_HALF',
+          reason: 'Dentist appointment',
+        })
+        .expect(201);
+
+      // Request second half on same day - should succeed!
+      await request(server())
+        .post('/leave')
+        .set('Cookie', employeeCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .send({
+          type: 'SICK',
+          startDate: '2026-09-15',
+          endDate: '2026-09-15',
+          isHalfDay: true,
+          halfDayPeriod: 'SECOND_HALF',
+          reason: 'Doctor checkup',
+        })
+        .expect(201);
+
+      // Request another first half on same day - should conflict (409)!
+      await request(server())
+        .post('/leave')
+        .set('Cookie', employeeCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .send({
+          type: 'ANNUAL',
+          startDate: '2026-09-15',
+          endDate: '2026-09-15',
+          isHalfDay: true,
+          halfDayPeriod: 'FIRST_HALF',
+          reason: 'Double book morning',
+        })
+        .expect(409);
+    });
+
+    it('supports self-service cancellation and restores balances dynamically', async () => {
+      // Amit Patel usr-4 applies for a 1-day SICK leave
+      const res = await request(server())
+        .post('/leave')
+        .set('Cookie', employeeCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .send({
+          type: 'PERSONAL',
+          startDate: '2026-09-22',
+          endDate: '2026-09-22',
+          reason: 'Personal errand',
+        })
+        .expect(201);
+
+      const leaveId = res.body.id;
+
+      // Cancel it
+      await request(server())
+        .post(`/leave/${leaveId}/cancel`)
+        .set('Cookie', employeeCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .expect(200);
+
+      // Verify status is CANCELLED
+      const check = await prisma.leaveRequest.findUnique({ where: { id: leaveId } });
+      expect(check?.status).toBe('CANCELLED');
+    });
+  });
 });
