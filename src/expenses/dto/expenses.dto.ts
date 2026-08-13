@@ -1,6 +1,20 @@
-import { IsIn, IsNotEmpty, IsNumber, IsOptional, IsString } from 'class-validator';
+import { IsIn, IsNotEmpty, IsNumber, IsOptional, IsString, Min } from 'class-validator';
 
-const CATEGORIES = ['Travel', 'Food', 'Fuel', 'Hotel', 'Miscellaneous'] as const;
+const CATEGORIES = [
+  'Travel',
+  'Food',
+  'Fuel',
+  'Hotel',
+  'Client Dinner',
+  'Conference',
+  'Office Supplies',
+  'Internet',
+  'Communication',
+  'Medical',
+  'Training',
+  'Equipment',
+  'Miscellaneous',
+] as const;
 
 export class CreateExpenseClaimDto {
   @IsString()
@@ -8,9 +22,10 @@ export class CreateExpenseClaimDto {
   title!: string;
 
   @IsIn(CATEGORIES, { message: 'Invalid expense category.' })
-  category!: 'Travel' | 'Food' | 'Fuel' | 'Hotel' | 'Miscellaneous';
+  category!: (typeof CATEGORIES)[number];
 
   @IsNumber({}, { message: 'Amount must be a number.' })
+  @Min(0.01, { message: 'Amount must be greater than 0.' })
   amount!: number;
 
   @IsString()

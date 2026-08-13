@@ -1,6 +1,8 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import { writeAuditLog } from '../common/audit-log';
 import type { SaveTimesheetDto } from './dto/timesheets.dto';
 
 function canManage(permissions: string[]): boolean {
@@ -9,7 +11,10 @@ function canManage(permissions: string[]): boolean {
 
 @Injectable()
 export class TimesheetsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notifications: NotificationsService,
+  ) {}
 
   private async getEmployee(userId: string, organizationId: string) {
     const employee = await this.prisma.employee.findFirst({
@@ -24,6 +29,24 @@ export class TimesheetsService {
   async saveTimesheet(organizationId: string, userId: string, dto: SaveTimesheetDto) {
     const employee = await this.getEmployee(userId, organizationId);
     
+    // Validate daily hours arrays & daily sums
+    const dailyTotals = Array(7).fill(0);
+    for (const r of dto.rows) {
+      if (r.hours.length !== 7) {
+        throw new BadRequestException('Each row must contain exactly 7 daily hour values.');
+      }
+      for (let i = 0; i < 7; i++) {
+        const h = r.hours[i];
+        if (h < 0 || h > 24) {
+          throw new BadRequestException('Daily hours must be between 0 and 24.');
+        }
+        dailyTotals[i] += h;
+        if (dailyTotals[i] > 24) {
+          throw new BadRequestException(`Total hours tracked on day ${i + 1} cannot exceed 24 hours.`);
+        }
+      }
+    }
+
     // Calculate total hours
     let totalHours = 0;
     for (const r of dto.rows) {
@@ -45,6 +68,17 @@ export class TimesheetsService {
           rowsJson: JSON.stringify(dto.rows),
         },
       });
+
+      await writeAuditLog(this.prisma, {
+        organizationId,
+        userId,
+        action: 'UPDATE',
+        resource: 'Timesheet',
+        resourceId: updated.id,
+        result: 'ALLOW',
+        details: { weekStartDate: dto.weekStartDate, totalHours },
+      });
+
       return {
         id: updated.id,
         weekStartDate: updated.weekStartDate,
@@ -64,6 +98,16 @@ export class TimesheetsService {
         totalHours,
         rowsJson: JSON.stringify(dto.rows),
       },
+    });
+
+    await writeAuditLog(this.prisma, {
+      organizationId,
+      userId,
+      action: 'CREATE',
+      resource: 'Timesheet',
+      resourceId: created.id,
+      result: 'ALLOW',
+      details: { weekStartDate: dto.weekStartDate, totalHours },
     });
 
     return {
@@ -108,13 +152,32 @@ export class TimesheetsService {
     };
   }
 
-  async updateStatus(id: string, organizationId: string, permissions: string[], status: 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'REJECTED') {
+  async updateStatus(
+    id: string,
+    organizationId: string,
+    userId: string,
+    permissions: string[],
+    status: 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'REJECTED',
+  ) {
     const timesheet = await this.prisma.timesheet.findUnique({ where: { id } });
     if (!timesheet || timesheet.organizationId !== organizationId) {
       throw new NotFoundException('Timesheet not found.');
     }
 
+    // Immutability checks: Block changing status of already APPROVED timesheets
+    if (timesheet.status === 'APPROVED') {
+      throw new ForbiddenException('Cannot modify status of an approved timesheet.');
+    }
+
+    const employee = await this.prisma.employee.findFirst({ where: { userId, organizationId } });
+
     // Submission to SUBMITTED or back to DRAFT is allowed by the owner employee
+    if (status === 'DRAFT' || status === 'SUBMITTED') {
+      if (!employee || timesheet.employeeId !== employee.id) {
+        throw new ForbiddenException('You can only submit or modify your own timesheets.');
+      }
+    }
+
     // Approval/rejection is restricted to managers
     if (status === 'APPROVED' || status === 'REJECTED') {
       if (!canManage(permissions)) {
@@ -126,6 +189,44 @@ export class TimesheetsService {
       where: { id },
       data: { status },
     });
+
+    // Write audit log
+    await writeAuditLog(this.prisma, {
+      organizationId,
+      userId,
+      action: status === 'APPROVED' || status === 'REJECTED' ? 'DECIDE' : 'UPDATE',
+      resource: 'Timesheet',
+      resourceId: id,
+      result: 'ALLOW',
+      details: { status },
+    });
+
+    // Notifications
+    const timesheetEmployee = await this.prisma.employee.findUnique({ where: { id: timesheet.employeeId } });
+    if (status === 'SUBMITTED' && timesheetEmployee?.managerId) {
+      const manager = await this.prisma.employee.findUnique({ where: { id: timesheetEmployee.managerId } });
+      if (manager?.userId) {
+        await this.notifications.create({
+          userId: manager.userId,
+          organizationId,
+          title: 'Timesheet Submitted',
+          body: `${timesheetEmployee.firstName} submitted weekly timesheet for ${timesheet.weekStartDate}.`,
+          kind: 'employee',
+          link: '/dashboard/timesheets',
+        });
+      }
+    }
+
+    if ((status === 'APPROVED' || status === 'REJECTED') && timesheetEmployee?.userId) {
+      await this.notifications.create({
+        userId: timesheetEmployee.userId,
+        organizationId,
+        title: `Timesheet ${status === 'APPROVED' ? 'Approved' : 'Rejected'}`,
+        body: `Your weekly timesheet for ${timesheet.weekStartDate} has been ${status.toLowerCase()}.`,
+        kind: 'employee',
+        link: '/dashboard/timesheets',
+      });
+    }
 
     let rows = [];
     try {

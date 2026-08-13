@@ -76,6 +76,7 @@ export type PublicLeaveData = {
    * upfront so the UI can say so before they fill out a whole form.
    */
   hasEmployeeRecord: boolean;
+  holidays?: string[];
 };
 
 /** Whole days between two ISO dates, inclusive. */

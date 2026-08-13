@@ -5,6 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { deleteCompanyDocument } from '../common/cloudinary-upload';
+import { writeAuditLog } from '../common/audit-log';
 import type { Organization } from './organization.entity';
 
 /**
@@ -29,8 +30,6 @@ export class OrganizationsService implements OnModuleInit {
    * (a replica set) and crash startup on a standalone mongod — see UsersService.
    */
   async onModuleInit(): Promise<void> {
-    // Non-fatal, same reasoning as UsersService.onModuleInit: a DB blip at boot
-    // must not stop the API from listening.
     try {
       const existing = await this.prisma.organization.findUnique({ where: { id: 'org-alderway' } }).catch(() => null);
       if (!existing) {
@@ -75,15 +74,37 @@ export class OrganizationsService implements OnModuleInit {
       attendanceWorkingHours?: number;
       attendanceHolidays?: string[];
     },
+    userId?: string,
   ): Promise<Organization> {
-    return (await this.prisma.organization.update({
+    const existing = await this.prisma.organization.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException('Company not found.');
+
+    if (patch.attendanceWorkingHours !== undefined) {
+      if (patch.attendanceWorkingHours <= 0 || patch.attendanceWorkingHours > 24) {
+        throw new BadRequestException('Working hours must be between 1 and 24.');
+      }
+    }
+
+    const workingHours = patch.attendanceWorkingHours ?? existing.attendanceWorkingHours ?? 8.0;
+
+    if (patch.attendanceHalfDayThreshold !== undefined) {
+      if (patch.attendanceHalfDayThreshold <= 0 || patch.attendanceHalfDayThreshold > workingHours) {
+        throw new BadRequestException('Half-day threshold must be greater than 0 and less than total working hours.');
+      }
+    }
+
+    if (patch.attendanceLateThreshold !== undefined && patch.attendanceLateThreshold !== '') {
+      if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(patch.attendanceLateThreshold)) {
+        throw new BadRequestException('Late threshold must be a valid HH:MM time string (e.g. 09:30).');
+      }
+    }
+
+    const updated = (await this.prisma.organization.update({
       where: { id },
       data: {
         ...(patch.name ? { name: patch.name.trim() } : {}),
         ...(patch.address ? { address: patch.address.trim() } : {}),
         ...(patch.industry ? { industry: patch.industry } : {}),
-        // '' explicitly clears it — only skip the field when it's undefined
-        // (not sent at all), unlike the trim-and-skip-empty fields above.
         ...(patch.leaveNotificationEmail !== undefined
           ? { leaveNotificationEmail: patch.leaveNotificationEmail.trim() || null }
           : {}),
@@ -93,6 +114,20 @@ export class OrganizationsService implements OnModuleInit {
         ...(patch.attendanceHolidays !== undefined ? { attendanceHolidays: patch.attendanceHolidays } : {}),
       },
     })) as Organization;
+
+    if (userId) {
+      await writeAuditLog(this.prisma, {
+        organizationId: id,
+        userId,
+        action: 'UPDATE',
+        resource: 'Organization',
+        resourceId: id,
+        result: 'ALLOW',
+        details: { patch },
+      });
+    }
+
+    return updated;
   }
 
   /**
@@ -128,17 +163,22 @@ export class OrganizationsService implements OnModuleInit {
       params.jobTitle,
     );
 
+    await writeAuditLog(this.prisma, {
+      organizationId: organization.id,
+      userId: params.userId,
+      action: 'CREATE',
+      resource: 'Organization',
+      resourceId: organization.id,
+      result: 'ALLOW',
+      details: { name: params.name, industry: params.industry },
+    });
+
     return { organization };
   }
 
   /**
    * Permanently deletes a company and every row scoped to it across every
-   * module — a hard delete, by explicit decision (no "restore" concept, no
-   * `deletedAt` filtering to thread through every other service). Only the
-   * Owner (the user who created it, per `ownerId`) may do this, and only if
-   * they belong to at least one other company afterwards — nobody can delete
-   * their way down to zero companies (§10.2's own-company version of this
-   * rule, extended to the account level).
+   * module.
    */
   async remove(configService: ConfigService, userId: string, organizationId: string, confirmName: string): Promise<void> {
     const organization = await this.prisma.organization.findUnique({ where: { id: organizationId } });
@@ -159,28 +199,17 @@ export class OrganizationsService implements OnModuleInit {
       throw new BadRequestException('You must belong to at least one company — create or join another before deleting this one.');
     }
 
-    // Push-only, before anything is deleted — a persisted Notification row
-    // would be unreachable the moment this org disappears from everyone's
-    // workspace switcher, so this is the one trigger that skips the DB (§
-    // NotificationsService.pushOnly's own note).
     const affectedMemberships = await this.prisma.membership.findMany({ where: { organizationId } });
     await this.notifications.pushOnly(
       affectedMemberships.map((m) => m.userId),
       { title: 'Your company was deleted', body: `${organization.name} has been permanently deleted by its Owner.` },
     );
 
-    // Clean up real Cloudinary assets first, best-effort — deleteCompanyDocument
-    // already logs (rather than throws) on failure, so one bad asset can't
-    // abort the rest of the teardown (§6, "no orphaned Cloudinary assets").
     const documents = await this.prisma.document.findMany({ where: { organizationId } });
     for (const doc of documents) {
       await deleteCompanyDocument(configService, doc.cloudinaryPublicId, doc.cloudinaryResourceType as 'image' | 'raw');
     }
 
-    // No `$transaction` — this schema deliberately avoids it everywhere else
-    // too (Mongo transactions need a replica set; a standalone mongod, a
-    // common local/dev setup, would throw and abort the whole deletion).
-    // Leaf data first, Organization last.
     await Promise.all([
       this.prisma.review.deleteMany({ where: { organizationId } }),
       this.prisma.goal.deleteMany({ where: { organizationId } }),

@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException, forwardRef } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -52,6 +52,7 @@ export class LeaveService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
+    @Inject(forwardRef(() => ApprovalsService))
     private readonly approvals: ApprovalsService,
   ) {}
 
@@ -78,7 +79,12 @@ export class LeaveService {
   async get(params: { userId: string; organizationId: string; permissions: string[] }): Promise<PublicLeaveData> {
     const { organizationId } = params;
     const manage = canApprove(params.permissions);
-    const entitlement = await this.entitlementFor(organizationId);
+    const org = await this.prisma.organization.findUnique({
+      where: { id: organizationId },
+      select: { leaveAnnualDays: true, leaveSickDays: true, leavePersonalDays: true, attendanceHolidays: true },
+    });
+    const entitlement = resolveEntitlement(org ?? { leaveAnnualDays: null, leaveSickDays: null, leavePersonalDays: null });
+    const holidays = org?.attendanceHolidays || [];
 
     const rawEmployees = await this.prisma.employee.findMany({ where: { organizationId } });
     const allEmployees = rawEmployees.filter((e) => !e.deletedAt);
@@ -110,7 +116,7 @@ export class LeaveService {
 
     const balances: PublicLeaveBalance[] = myEmployeeRecord
       ? this.balancesFrom(rawRequests.filter((r) => r.employeeId === myEmployeeRecord.id), entitlement)
-      : LEAVE_TYPES.map((type) => ({ type, total: entitlement[type], used: 0 }));
+      : LEAVE_TYPES.map((type) => ({ type, total: entitlement[type], used: 0, pending: 0 }));
 
     // Nobody — not even the Owner — may approve their own request. Enforced here
     // (and again in `decide`), not just hidden in the UI.
@@ -132,6 +138,7 @@ export class LeaveService {
       upcoming,
       hasEmployeeRecord: myEmployeeRecord !== null,
       policy: { annual: entitlement.ANNUAL, sick: entitlement.SICK, personal: entitlement.PERSONAL },
+      holidays,
     };
   }
 
@@ -357,6 +364,17 @@ export class LeaveService {
       where: { id },
       data: { status: decision, decidedByUserId: userId, decidedAt: new Date() },
     });
+
+    // Sync with approvals module if a pending request exists
+    const approval = await this.prisma.approvalRequest.findFirst({
+      where: { organizationId, sourceModule: 'Leave', sourceRecordId: id, status: 'PENDING' },
+    });
+    if (approval) {
+      await this.prisma.approvalRequest.update({
+        where: { id: approval.id },
+        data: { status: decision },
+      });
+    }
 
     const employee = await this.prisma.employee.findUnique({ where: { id: request.employeeId } });
     if (!employee) {

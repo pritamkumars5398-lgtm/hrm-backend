@@ -172,9 +172,9 @@ describe('Payroll and Payslips Module (e2e)', () => {
   });
 
   describe('Salary Structure and Payslip Generation Lifecycle', () => {
-    it('fails to finalize payslip when no salary structure is defined', async () => {
+    it('fails to submit payslip for approval when no salary structure is defined', async () => {
       await request(server())
-        .post('/payroll/payslips/emp-4/finalize?month=2026-08')
+        .post('/payroll/payslips/emp-4/submit-approval?month=2026-08')
         .set('Cookie', hrCookie)
         .set('X-Workspace-Id', 'org-alderway')
         .expect(400);
@@ -230,25 +230,88 @@ describe('Payroll and Payslips Module (e2e)', () => {
       expect(res.body.grossEarnings).toBe(87000); // 50000 + 20000 + 10000 + 5000 + 2000
     });
 
-    it('allows finalizing payslip and verifies calculations and notifications', async () => {
-      const res = await request(server())
-        .post('/payroll/payslips/emp-4/finalize?month=2026-08')
+    it('allows submitting payslip for approval, rejecting it, editing it, and then approving it', async () => {
+      // 1. Submit for approval
+      const submitRes = await request(server())
+        .post('/payroll/payslips/emp-4/submit-approval?month=2026-08')
         .set('Cookie', hrCookie)
         .set('X-Workspace-Id', 'org-alderway')
         .expect(200);
 
-      expect(res.body.status).toBe('FINALIZED');
-      expect(res.body.netSalary).toBeDefined();
-      expect(res.body.lopDeduction).toBeDefined();
-      expect(res.body.totalDeductions).toBe(res.body.incomeTax + res.body.lopDeduction + res.body.otherDeduction);
-      expect(res.body.netSalary).toBeCloseTo(res.body.grossEarnings - res.body.totalDeductions, 2);
+      expect(submitRes.body.status).toBe('PENDING_APPROVAL');
 
-      // Verify that duplicate finalization is forbidden
+      const approval = await prisma.approvalRequest.findFirst({
+        where: { organizationId: 'org-alderway', sourceModule: 'Payroll', sourceRecordId: submitRes.body.id, status: 'PENDING' },
+      });
+      expect(approval).toBeDefined();
+
+      // Verify that duplicate submit-approval and draft updates are blocked while pending
       await request(server())
-        .post('/payroll/payslips/emp-4/finalize?month=2026-08')
+        .post('/payroll/payslips/emp-4/submit-approval?month=2026-08')
         .set('Cookie', hrCookie)
         .set('X-Workspace-Id', 'org-alderway')
         .expect(400);
+
+      await request(server())
+        .post('/payroll/payslips/emp-4?month=2026-08')
+        .set('Cookie', hrCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .send({ bonus: 1000 })
+        .expect(400);
+
+      // 2. Reject it via approvals module
+      await request(server())
+        .patch(`/approvals/${approval?.id}/decide`)
+        .set('Cookie', ownerCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .send({ status: 'REJECTED', rejectionReason: 'Incorrect bonus calculations' })
+        .expect(200);
+
+      // Verify status is back to DRAFT and notes contain rejection message
+      const rejectedPayslip = await prisma.payslip.findUnique({ where: { id: submitRes.body.id } });
+      expect(rejectedPayslip?.status).toBe('DRAFT');
+      expect(rejectedPayslip?.notes).toContain('Rejected: Incorrect bonus calculations');
+
+      // 3. Edit draft
+      const editRes = await request(server())
+        .post('/payroll/payslips/emp-4?month=2026-08')
+        .set('Cookie', hrCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .send({ bonus: 1000 })
+        .expect(201);
+      expect(editRes.body.bonus).toBe(1000);
+
+      // 4. Re-submit for approval
+      const submitRes2 = await request(server())
+        .post('/payroll/payslips/emp-4/submit-approval?month=2026-08')
+        .set('Cookie', hrCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .expect(200);
+      expect(submitRes2.body.status).toBe('PENDING_APPROVAL');
+
+      const approval2 = await prisma.approvalRequest.findFirst({
+        where: { organizationId: 'org-alderway', sourceModule: 'Payroll', sourceRecordId: submitRes.body.id, status: 'PENDING' },
+      });
+      expect(approval2).toBeDefined();
+
+      // 5. Approve it via approvals module
+      await request(server())
+        .patch(`/approvals/${approval2?.id}/decide`)
+        .set('Cookie', ownerCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .send({ status: 'APPROVED' })
+        .expect(200);
+
+      // Verify status is FINALIZED and snapshot values are populated
+      const finalizedPayslip = await prisma.payslip.findUnique({ where: { id: submitRes.body.id } });
+      expect(finalizedPayslip?.status).toBe('FINALIZED');
+      expect(finalizedPayslip?.snapshot).toBeDefined();
+      expect(finalizedPayslip?.snapshot?.basic).toBe(50000);
+      expect(finalizedPayslip?.snapshot?.lopDeduction).toBeDefined();
+      expect(finalizedPayslip?.snapshot?.netSalary).toBeCloseTo(
+        finalizedPayslip!.snapshot!.grossEarnings - finalizedPayslip!.snapshot!.totalDeductions,
+        2,
+      );
 
       // Verify that draft updates are blocked after finalization
       await request(server())

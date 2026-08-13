@@ -199,5 +199,75 @@ describe('Timesheets Module (e2e)', () => {
 
       expect(res.body.status).toBe('APPROVED');
     });
+
+    it('blocks save when daily tracked hours exceed 24 hours', async () => {
+      await request(server())
+        .post('/timesheets')
+        .set('Cookie', employeeCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .send({
+          weekStartDate: '2026-08-03',
+          rows: [
+            { client: 'Acme Corp', project: 'Enterprise Portal', task: 'Frontend Coding', hours: [25, 8, 8, 8, 8, 0, 0], isBillable: true },
+          ],
+        })
+        .expect(400);
+    });
+
+    it('blocks save when row hours array is not exactly 7 elements', async () => {
+      await request(server())
+        .post('/timesheets')
+        .set('Cookie', employeeCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .send({
+          weekStartDate: '2026-08-03',
+          rows: [
+            { client: 'Acme Corp', project: 'Enterprise Portal', task: 'Frontend Coding', hours: [8, 8, 8], isBillable: true },
+          ],
+        })
+        .expect(400);
+    });
+
+    it('blocks modification or status changes of already approved timesheets', async () => {
+      // Trying to change status from APPROVED back to DRAFT should throw 403
+      await request(server())
+        .patch(`/timesheets/${timesheetId}/status`)
+        .set('Cookie', employeeCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .send({ status: 'DRAFT' })
+        .expect(403);
+
+      // Trying to save changes to approved timesheet should throw 403
+      await request(server())
+        .post('/timesheets')
+        .set('Cookie', employeeCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .send({
+          weekStartDate: '2026-08-03',
+          rows: [
+            { client: 'Acme Corp', project: 'Enterprise Portal', task: 'Frontend Coding', hours: [8, 8, 8, 8, 8, 0, 0], isBillable: true },
+          ],
+        })
+        .expect(403);
+    });
+
+    it('records audit logs and notifications for timesheet operations', async () => {
+      const logs = await prisma.auditLog.findMany({
+        where: { resource: 'Timesheet' },
+        orderBy: { timestamp: 'asc' },
+      });
+      expect(logs.length).toBe(3);
+      expect(logs[0].action).toBe('CREATE');
+      expect(logs[1].action).toBe('UPDATE');
+      expect(logs[2].action).toBe('DECIDE');
+      expect(JSON.parse(logs[2].details!)).toEqual({ status: 'APPROVED' });
+
+      // Verify notification was sent to employee usr-4 on approval
+      const notifications = await prisma.notification.findMany({
+        where: { userId: 'usr-4', organizationId: 'org-alderway', title: 'Timesheet Approved' },
+      });
+      expect(notifications.length).toBeGreaterThanOrEqual(1);
+      expect(notifications[0].title).toBe('Timesheet Approved');
+    });
   });
 });

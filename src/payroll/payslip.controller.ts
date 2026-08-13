@@ -49,14 +49,14 @@ export class PayslipController {
     return this.payslipService.saveDraft(employeeId, membership.organizationId, membership.permissions, month, dto);
   }
 
-  @Post(':employeeId/finalize')
+  @Post(':employeeId/submit-approval')
   @HttpCode(200)
-  async finalize(
+  async submitApproval(
     @CurrentMembership() m: Membership | undefined,
     @Param('employeeId') employeeId: string,
     @Query('month') month: string,
   ): Promise<PublicPayslip> {
     const membership = requireMembership(m);
-    return this.payslipService.finalize(employeeId, membership.organizationId, membership.userId, membership.permissions, month);
+    return this.payslipService.submitApproval(employeeId, membership.organizationId, membership.userId, membership.permissions, month);
   }
 }

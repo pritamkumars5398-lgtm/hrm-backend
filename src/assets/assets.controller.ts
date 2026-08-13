@@ -24,13 +24,19 @@ export class AssetsController {
     @Body() dto: CreateAssetDto,
   ) {
     const membership = requireMembership(m);
-    return this.assetsService.createAsset(membership.organizationId, membership.permissions, dto);
+    return this.assetsService.createAsset(membership.organizationId, membership.userId, membership.permissions, dto);
   }
 
   @Get()
   async listAssets(@CurrentMembership() m: Membership | undefined) {
     const membership = requireMembership(m);
-    return this.assetsService.listAssets(membership.organizationId, membership.permissions);
+    return this.assetsService.listAssets(membership.organizationId);
+  }
+
+  @Get('my-assets')
+  async listMyAssets(@CurrentMembership() m: Membership | undefined) {
+    const membership = requireMembership(m);
+    return this.assetsService.listMyAssets(membership.organizationId, membership.userId);
   }
 
   @Patch(':id/status')
@@ -40,7 +46,7 @@ export class AssetsController {
     @Body() dto: UpdateAssetStatusDto,
   ) {
     const membership = requireMembership(m);
-    return this.assetsService.updateAssetStatus(id, membership.organizationId, membership.permissions, dto);
+    return this.assetsService.updateAssetStatus(id, membership.organizationId, membership.userId, membership.permissions, dto);
   }
 
   @Delete(':id')
@@ -49,6 +55,6 @@ export class AssetsController {
     @Param('id') id: string,
   ) {
     const membership = requireMembership(m);
-    return this.assetsService.deleteAsset(id, membership.organizationId, membership.permissions);
+    return this.assetsService.deleteAsset(id, membership.organizationId, membership.userId, membership.permissions);
   }
 }

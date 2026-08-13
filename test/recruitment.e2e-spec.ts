@@ -265,5 +265,81 @@ describe('Recruitment & Digital Onboarding (e2e)', () => {
         .send({ stage: 'HIRED' })
         .expect(409);
     });
+
+    it('supports job requisition approval workflow and records audit logs', async () => {
+      // 1. Create a draft job requisition
+      const draftRes = await request(server())
+        .post('/recruitment/jobs')
+        .set('Cookie', hrCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .send({
+          title: 'Staff Security Engineer',
+          department: 'Security',
+          location: 'London',
+          headcount: 1,
+          status: 'DRAFT',
+        })
+        .expect(201);
+      expect(draftRes.body.status).toBe('DRAFT');
+
+      const draftJobId = draftRes.body.id;
+
+      // 2. Submit it for approval
+      await request(server())
+        .post(`/recruitment/jobs/${draftJobId}/submit`)
+        .set('Cookie', hrCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .expect(201);
+
+      // Verify status is PENDING
+      const listRes = await request(server())
+        .get('/recruitment/jobs')
+        .set('Cookie', hrCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .expect(200);
+      const pendingJob = listRes.body.find((j: any) => j.id === draftJobId);
+      expect(pendingJob.status).toBe('PENDING');
+
+      // 3. Find the pending approval request
+      const approvals = await prisma.approvalRequest.findMany({
+        where: { organizationId: 'org-alderway', sourceModule: 'Recruitment', sourceRecordId: draftJobId }
+      });
+      expect(approvals.length).toBe(1);
+      expect(approvals[0].status).toBe('PENDING');
+
+      const approvalId = approvals[0].id;
+
+      // 4. Decide on approval request (Approve it using Owner's cookie)
+      await request(server())
+        .patch(`/approvals/${approvalId}/decide`)
+        .set('Cookie', ownerCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .send({ status: 'APPROVED' })
+        .expect(200);
+
+      // 5. Verify the JobRequisition status is now OPEN
+      const openJob = await prisma.jobRequisition.findUnique({ where: { id: draftJobId } });
+      expect(openJob?.status).toBe('OPEN');
+
+      // 6. Verify audit logs are written
+      const jobLogs = await prisma.auditLog.findMany({
+        where: { organizationId: 'org-alderway', resource: 'JobRequisition' },
+        orderBy: { timestamp: 'asc' },
+      });
+      expect(jobLogs.length).toBe(3);
+      expect(JSON.parse(jobLogs[0].details!)).toEqual({ title: 'Senior Frontend Architect', department: 'Engineering' });
+      expect(JSON.parse(jobLogs[1].details!)).toEqual({ title: 'Staff Security Engineer', department: 'Security' });
+      expect(JSON.parse(jobLogs[2].details!)).toEqual({ status: 'PENDING' });
+
+      // Verify audit logs for Candidate
+      const candidateLogs = await prisma.auditLog.findMany({
+        where: { organizationId: 'org-alderway', resource: 'Candidate' },
+        orderBy: { timestamp: 'asc' },
+      });
+      expect(candidateLogs.length).toBe(6);
+      expect(JSON.parse(candidateLogs[0].details!)).toEqual({ name: 'Vikram Seth', email: 'vikram.seth@example.com' });
+      expect(JSON.parse(candidateLogs[4].details!)).toEqual({ stage: 'HIRED' });
+      expect(JSON.parse(candidateLogs[5].details!)).toEqual({ name: 'Vikram Seth Duplicate', email: 'vikram.seth@example.com' });
+    });
   });
 });

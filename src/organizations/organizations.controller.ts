@@ -9,11 +9,9 @@ import {
   Param,
   Patch,
   Post,
-  Res,
   UseGuards,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import type { Response } from 'express';
 import { OrganizationsService } from './organizations.service';
 import { CreateOrganizationDto, UpdateOrganizationDto } from './dto/create-organization.dto';
 import { DeleteOrganizationDto } from './dto/delete-organization.dto';
@@ -22,7 +20,6 @@ import { AuthService } from '../auth/auth.service';
 import { UsersService } from '../users/users.service';
 import { JwtAuthGuard } from '../common/jwt-auth.guard';
 import { CurrentUser } from '../common/current-user.decorator';
-import { setAuthCookie } from '../common/auth-cookie';
 import type { JwtPayload } from '../common/jwt-payload';
 import { PermissionsGuard, RequirePermission } from '../common/permissions.guard';
 import { CurrentMembership } from '../common/current-membership.decorator';
@@ -69,7 +66,7 @@ export class OrganizationsController {
     @CurrentMembership() membership: Membership,
     @Body() dto: UpdateOrganizationDto,
   ): Promise<Organization> {
-    return this.organizationsService.update(membership.organizationId, dto);
+    return this.organizationsService.update(membership.organizationId, dto, membership.userId);
   }
 
   /** The active company the signed-in user belongs to, based on X-Workspace-Id. */
@@ -88,12 +85,7 @@ export class OrganizationsController {
   }
 
   /**
-   * Permanently deletes a company. Owner-only (checked against the company's
-   * own `ownerId`, not the active workspace) — targets `:id` directly rather
-   * than the active X-Workspace-Id, since the Owner may be deleting a company
-   * other than the one they currently have open (e.g. from the workspace
-   * switcher). No `PermissionsGuard` for that reason; ownership is verified
-   * inside the service instead.
+   * Permanently deletes a company. Owner-only.
    */
   @Delete(':id')
   @UseGuards(JwtAuthGuard)

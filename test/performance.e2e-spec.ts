@@ -212,6 +212,11 @@ describe('Performance Module (e2e)', () => {
       expect(res.body.records[0].goals[0].progress).toBe(0);
 
       goalId = res.body.records[0].goals[0].id;
+
+      // Verify audit log for goal creation
+      const logs = await prisma.auditLog.findMany({ where: { organizationId: 'org-alderway', resource: 'Goal', action: 'CREATE' } });
+      expect(logs.length).toBe(1);
+      expect(JSON.parse(logs[0].details!)).toEqual({ title: 'Master NestJS' });
     });
 
     it('allows employees to update progress on their own goals', async () => {
@@ -230,6 +235,11 @@ describe('Performance Module (e2e)', () => {
         .expect(200);
 
       expect(res.body.records[0].goals[0].progress).toBe(75);
+
+      // Verify audit log for progress update
+      const updateLogs = await prisma.auditLog.findMany({ where: { organizationId: 'org-alderway', resource: 'Goal', action: 'UPDATE' } });
+      expect(updateLogs.length).toBe(1);
+      expect(JSON.parse(updateLogs[0].details!)).toEqual({ progress: 75 });
     });
 
     it('validates goal progress values', async () => {
@@ -267,6 +277,11 @@ describe('Performance Module (e2e)', () => {
       expect(perfData.body.records[0].reviews[0].rating).toBe(4);
       expect(perfData.body.records[0].reviews[0].summary).toBe('Excellent technical capabilities');
       expect(perfData.body.summary.avgRating).toBe(4.0);
+
+      // Verify audit log for review submission
+      const reviewLogs = await prisma.auditLog.findMany({ where: { organizationId: 'org-alderway', resource: 'Review', action: 'CREATE' } });
+      expect(reviewLogs.length).toBe(1);
+      expect(JSON.parse(reviewLogs[0].details!)).toEqual({ rating: 4 });
 
       // 2. Try submitting a duplicate review for the same cycle
       await request(server())

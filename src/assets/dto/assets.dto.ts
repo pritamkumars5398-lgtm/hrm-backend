@@ -1,6 +1,20 @@
 import { IsIn, IsNotEmpty, IsOptional, IsString } from 'class-validator';
 
-const CATEGORIES = ['Laptop', 'Desktop', 'Mobile', 'SIM', 'Accessory', 'License'] as const;
+const CATEGORIES = [
+  'Laptop',
+  'Desktop',
+  'Monitor',
+  'Mobile',
+  'Tablet',
+  'ID Card',
+  'Access Card',
+  'Furniture',
+  'Vehicle',
+  'SIM',
+  'Accessory',
+  'License',
+] as const;
+
 const STATUSES = ['AVAILABLE', 'ASSIGNED', 'REPAIR', 'RETIRED'] as const;
 
 export class CreateAssetDto {
@@ -9,7 +23,7 @@ export class CreateAssetDto {
   name!: string;
 
   @IsIn(CATEGORIES, { message: 'Invalid asset category.' })
-  category!: 'Laptop' | 'Desktop' | 'Mobile' | 'SIM' | 'Accessory' | 'License';
+  category!: (typeof CATEGORIES)[number];
 
   @IsString()
   @IsOptional()
@@ -22,7 +36,7 @@ export class CreateAssetDto {
 
 export class UpdateAssetStatusDto {
   @IsIn(STATUSES, { message: 'Invalid asset status.' })
-  status!: 'AVAILABLE' | 'ASSIGNED' | 'REPAIR' | 'RETIRED';
+  status!: (typeof STATUSES)[number];
 
   @IsString()
   @IsOptional()

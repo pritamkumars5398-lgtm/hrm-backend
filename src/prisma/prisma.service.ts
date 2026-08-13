@@ -11,6 +11,21 @@ import { PrismaClient, Prisma } from '@prisma/client';
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PrismaService.name);
 
+  constructor() {
+    const mongoUri = process.env.MONGO_URI || process.env.DATABASE_URL;
+    super(
+      mongoUri
+        ? {
+            datasources: {
+              db: {
+                url: mongoUri,
+              },
+            },
+          }
+        : undefined,
+    );
+  }
+
   async onModuleInit(): Promise<void> {
     try {
       await this.$connect();

@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { writeAuditLog } from '../common/audit-log';
 import type { DepartmentRow, ReportsData } from './reports.entity';
 
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -7,8 +8,6 @@ const isoDate = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(
 const isWeekend = (d: Date) => d.getDay() === 0 || d.getDay() === 6;
 const round1 = (n: number) => Math.round(n * 10) / 10;
 
-/** Mirrors PermissionsGuard's own matching — payroll cost stays hidden from
- *  anyone without real payroll access, even if they hold reports.view (§4.6). */
 function canViewPayroll(permissions: string[]): boolean {
   return (
     permissions.includes('*') ||
@@ -29,14 +28,11 @@ type EmployeeRow = {
 export class ReportsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async get(organizationId: string, permissions: string[]): Promise<ReportsData> {
+  async get(organizationId: string, userId: string, permissions: string[]): Promise<ReportsData> {
     const allEmployees: EmployeeRow[] = await this.prisma.employee.findMany({
       where: { organizationId },
       select: { id: true, department: true, startDate: true, deletedAt: true },
     });
-    // There is no lifecycle/status field on Employee (§ employee.entity's own
-    // note) — a soft-deleted record is the only real signal that someone left,
-    // so it stands in for "attrition" here.
     const activeEmployees = allEmployees.filter((e) => !e.deletedAt);
     const activeIds = activeEmployees.map((e) => e.id);
 
@@ -46,7 +42,7 @@ export class ReportsService {
     const monthStart = `${year}-${pad(month + 1)}-01`;
     const todayISO = isoDate(now);
 
-    const [records, leaveRequests, allApprovedLeave] = await Promise.all([
+    const [records, leaveRequests, allApprovedLeave, approvedExpenses, travelRequests, openTickets, totalAssets] = await Promise.all([
       activeIds.length
         ? this.prisma.attendanceRecord.findMany({
             where: { organizationId, employeeId: { in: activeIds }, date: { gte: monthStart, lt: todayISO }, checkIn: { not: null } },
@@ -58,6 +54,18 @@ export class ReportsService {
           })
         : Promise.resolve([]),
       this.prisma.leaveRequest.findMany({ where: { organizationId, status: 'APPROVED' } }),
+      this.prisma.expenseClaim.findMany({
+        where: { organizationId, status: { in: ['APPROVED', 'REIMBURSED'] } },
+      }),
+      this.prisma.travelRequest.count({
+        where: { organizationId, status: { in: ['APPROVED', 'BOOKED'] } },
+      }),
+      this.prisma.helpdeskTicket.count({
+        where: { organizationId, status: { in: ['OPEN', 'IN_PROGRESS'] } },
+      }),
+      this.prisma.asset.count({
+        where: { organizationId },
+      }),
     ]);
 
     const attendedKeys = new Set(records.map((r) => `${r.employeeId}:${r.date}`));
@@ -69,9 +77,6 @@ export class ReportsService {
       }
     }
 
-    // Same "expected working day" definition as the real Attendance module:
-    // weekdays only, from join date forward, never today/the future, and a
-    // day covered by approved leave doesn't count as a failure to attend.
     const attendanceRateFor = (employees: EmployeeRow[]): number => {
       let expected = 0;
       let attended = 0;
@@ -111,7 +116,7 @@ export class ReportsService {
 
     const headcountByMonth = Array.from({ length: 6 }, (_, i) => {
       const date = new Date(year, month - (5 - i), 1);
-      const cutoff = new Date(date.getFullYear(), date.getMonth() + 1, 0); // last day of that month
+      const cutoff = new Date(date.getFullYear(), date.getMonth() + 1, 0);
       const count = allEmployees.filter((e) => e.startDate <= cutoff && (!e.deletedAt || e.deletedAt > cutoff)).length;
       return { label: date.toLocaleDateString('en-GB', { month: 'short' }), value: count };
     });
@@ -125,6 +130,10 @@ export class ReportsService {
       payrollCost = Math.round(finalizedPayslips.reduce((sum, p) => sum + (p.snapshot?.grossEarnings ?? 0), 0));
     }
 
+    const expenseTotal = Math.round(
+      approvedExpenses.reduce((sum, c) => sum + (c.reimbursedAmount ?? c.approvedAmount ?? c.amount), 0),
+    );
+
     return {
       headcount: allEmployees.length,
       activeCount: activeEmployees.length,
@@ -132,8 +141,28 @@ export class ReportsService {
       avgAttendance: attendanceRateFor(activeEmployees),
       leaveDaysTaken: allApprovedLeave.reduce((sum, r) => sum + r.days, 0),
       payrollCost,
+      expenseTotal,
+      travelCount: travelRequests,
+      openTicketsCount: openTickets,
+      totalAssetsCount: totalAssets,
       departments,
       headcountByMonth,
     };
+  }
+
+  async export(organizationId: string, userId: string, permissions: string[]): Promise<ReportsData> {
+    const data = await this.get(organizationId, userId, permissions);
+
+    await writeAuditLog(this.prisma, {
+      organizationId,
+      userId,
+      action: 'EXPORT',
+      resource: 'Reports',
+      resourceId: `rpt-${organizationId}`,
+      result: 'ALLOW',
+      details: { format: 'CSV', activeHeadcount: data.activeCount },
+    });
+
+    return data;
   }
 }

@@ -22,6 +22,7 @@ import { ApprovalsModule } from './approvals/approvals.module';
 import { ExpensesModule } from './expenses/expenses.module';
 import { TravelModule } from './travel/travel.module';
 import { HelpdeskModule } from './helpdesk/helpdesk.module';
+import { OnboardingModule } from './onboarding/onboarding.module';
 import { HealthController } from './health/health.controller';
 
 /**
@@ -55,6 +56,7 @@ import { HealthController } from './health/health.controller';
     ExpensesModule,
     TravelModule,
     HelpdeskModule,
+    OnboardingModule,
   ],
   controllers: [HealthController],
 })

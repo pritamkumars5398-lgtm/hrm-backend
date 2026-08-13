@@ -363,6 +363,33 @@ model Candidate {
   createdAt      DateTime @default(now())
 }
 
+model Onboarding {
+  id             String    @id @map("_id")
+  organizationId String
+  employeeId     String    @unique
+  status         String    // IN_PROGRESS | COMPLETED
+  buddy          String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime? @updatedAt
+
+  @@index([organizationId])
+}
+
+model OnboardingTask {
+  id             String    @id @map("_id")
+  organizationId String
+  onboardingId   String
+  title          String
+  description    String?
+  category       String    // HR | IT | MANAGER | EMPLOYEE
+  status         String    // PENDING | COMPLETED
+  dueDate        String?   // YYYY-MM-DD
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime? @updatedAt
+
+  @@index([organizationId, onboardingId])
+}
+
 model Timesheet {
   id             String   @id @map("_id")
   organizationId String
@@ -387,18 +414,20 @@ model Asset {
 }
 
 model ExpenseClaim {
-  id              String   @id @map("_id")
-  organizationId  String
-  employeeId      String
-  title           String
-  category        String // Travel | Food | Fuel | Hotel | Miscellaneous
-  amount          Float
-  status          String // PENDING | APPROVED | REJECTED | REIMBURSED
-  receiptUrl      String?
-  claimDate       String // YYYY-MM-DD
-  rejectionReason String?
-  historyJson     String   @default("[]") // JSON audit history
-  createdAt       DateTime @default(now())
+  id               String   @id @map("_id")
+  organizationId   String
+  employeeId       String
+  title            String
+  category         String // Travel | Food | Fuel | Hotel | Client Dinner | Conference | Office Supplies | Internet | Communication | Medical | Training | Equipment | Miscellaneous
+  amount           Float // Claimed Amount
+  approvedAmount   Float? // Approved Amount (<= amount)
+  reimbursedAmount Float? // Reimbursed Amount (<= approvedAmount)
+  status           String // PENDING | APPROVED | REJECTED | REIMBURSED
+  receiptUrl       String?
+  claimDate        String // YYYY-MM-DD
+  rejectionReason  String?
+  historyJson      String   @default("[]") // JSON audit history
+  createdAt        DateTime @default(now())
 }
 
 model TravelRequest {
@@ -421,6 +450,7 @@ model HelpdeskTicket {
   id              String   @id @map("_id")
   organizationId  String
   employeeId      String
+  ticketNo        String?
   subject         String
   description     String
   category        String // HR | IT | Finance | Admin

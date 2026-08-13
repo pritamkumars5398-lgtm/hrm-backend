@@ -46,7 +46,7 @@ export class TimesheetsController {
     @Body() dto: UpdateTimesheetStatusDto,
   ) {
     const membership = requireMembership(m);
-    return this.timesheetsService.updateStatus(id, membership.organizationId, membership.permissions, dto.status);
+    return this.timesheetsService.updateStatus(id, membership.organizationId, membership.userId, membership.permissions, dto.status);
   }
 
   @Get('all')

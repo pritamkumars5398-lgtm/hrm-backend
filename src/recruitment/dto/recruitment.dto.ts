@@ -20,6 +20,11 @@ export class CreateJobDto {
   @IsString()
   @IsOptional()
   description?: string;
+
+  @IsString()
+  @IsOptional()
+  @IsIn(['DRAFT', 'OPEN'])
+  status?: 'DRAFT' | 'OPEN';
 }
 
 export class CreateCandidateDto {

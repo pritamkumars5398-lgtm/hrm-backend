@@ -161,7 +161,45 @@ async function ensureMongoDB(): Promise<void> {
   }
 }
 
+import net from 'net';
+
+function checkPortInUse(port: number): Promise<boolean> {
+  const check = (host: string): Promise<boolean> => {
+    return new Promise((resolve) => {
+      const socket = new net.Socket();
+      socket.setTimeout(200);
+      socket.once('connect', () => {
+        socket.destroy();
+        resolve(true);
+      });
+      socket.once('timeout', () => {
+        socket.destroy();
+        resolve(false);
+      });
+      socket.once('error', () => {
+        socket.destroy();
+        resolve(false);
+      });
+      socket.connect(port, host);
+    });
+  };
+
+  return Promise.all([check('127.0.0.1'), check('::1')]).then(
+    ([res1, res2]) => res1 || res2
+  );
+}
+
 async function bootstrap() {
+  const port = Number(process.env.PORT ?? 3000);
+  const inUse = await checkPortInUse(port);
+  if (inUse) {
+    console.log(`\n================================================================`);
+    console.log(` SUCCESS: Backend server is ALREADY active on http://localhost:${port}`);
+    console.log(` (No second terminal needed. You can close this terminal window).`);
+    console.log(`================================================================\n`);
+    process.exit(0);
+  }
+
   // Must happen before NestFactory.create / Prisma client initialisation.
   await ensureMongoDB();
 
@@ -188,7 +226,6 @@ async function bootstrap() {
     }),
   );
 
-  const port = process.env.PORT ?? 3000;
   try {
     await app.listen(port);
   } catch (err: any) {

@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Inject, forwardRef } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -11,6 +11,8 @@ import {
   type PublicPayslip,
 } from './payslip.entity';
 import type { SavePayslipDraftDto } from './dto/save-payslip-draft.dto';
+import { ApprovalsService } from '../approvals/approvals.service';
+import { writeAuditLog } from '../common/audit-log';
 
 /** payroll.manage implies view — mirrors PermissionsGuard's own '*'/wildcard matching. */
 function canView(permissions: string[]): boolean {
@@ -37,6 +39,8 @@ export class PayslipService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
+    @Inject(forwardRef(() => ApprovalsService))
+    private readonly approvals: ApprovalsService,
   ) {}
 
   /**
@@ -80,7 +84,14 @@ export class PayslipService {
       structuresByEmployee.set(s.employeeId, bucket);
     }
 
-    const { attendanceByEmployeeDate, leaveTypeByEmployeeDate } = await this.attendanceAndLeaveFor(
+    const org = await this.prisma.organization.findUnique({
+      where: { id: organizationId },
+      select: { attendanceHalfDayThreshold: true, attendanceHolidays: true },
+    });
+    const halfDayThreshold = org?.attendanceHalfDayThreshold ?? 5.0;
+    const holidays = org?.attendanceHolidays || [];
+
+    const { attendanceByEmployeeDate, leaveByEmployeeDate } = await this.attendanceAndLeaveFor(
       organizationId,
       employees.map((e) => e.id),
       month,
@@ -100,10 +111,12 @@ export class PayslipService {
 
       return this.toPublic(employee, structure, saved, {
         attendanceByDate: attendanceByEmployeeDate.get(employee.id) ?? new Map(),
-        leaveTypeByDate: leaveTypeByEmployeeDate.get(employee.id) ?? new Map(),
+        leaveByDate: leaveByEmployeeDate.get(employee.id) ?? new Map(),
         today,
         month,
         finalizedByName: saved?.finalizedByUserId ? (deciderNameById.get(saved.finalizedByUserId) ?? null) : null,
+        halfDayThreshold,
+        holidays,
       });
     });
   }
@@ -123,8 +136,8 @@ export class PayslipService {
     const employee = await this.requireEmployeeAnyStatus(employeeId, organizationId);
 
     const existing = await this.prisma.payslip.findUnique({ where: { employeeId_month: { employeeId, month } } });
-    if (existing?.status === 'FINALIZED') {
-      throw new BadRequestException('This payslip is already finalized and cannot be edited.');
+    if (existing && existing.status !== 'DRAFT') {
+      throw new BadRequestException(`This payslip has status ${existing.status} and cannot be edited.`);
     }
 
     const data = {
@@ -153,7 +166,7 @@ export class PayslipService {
     return this.oneFor(employee, organizationId, month, saved);
   }
 
-  async finalize(
+  async submitApproval(
     employeeId: string,
     organizationId: string,
     userId: string,
@@ -168,17 +181,24 @@ export class PayslipService {
     const employee = await this.requireEmployeeAnyStatus(employeeId, organizationId);
 
     const existing = await this.prisma.payslip.findUnique({ where: { employeeId_month: { employeeId, month } } });
-    if (existing?.status === 'FINALIZED') {
-      throw new BadRequestException('This payslip is already finalized.');
+    if (existing && existing.status !== 'DRAFT') {
+      throw new BadRequestException(`This payslip has status ${existing.status} and cannot be submitted for approval.`);
     }
 
     const structures = await this.prisma.salaryStructure.findMany({ where: { organizationId, employeeId } });
     const structure = structureForMonth(structures, month);
     if (!structure) {
-      throw new BadRequestException('This employee has no salary structure yet — set one up before finalizing payroll.');
+      throw new BadRequestException('This employee has no salary structure yet — set one up before submitting payroll.');
     }
 
-    const { attendanceByEmployeeDate, leaveTypeByEmployeeDate } = await this.attendanceAndLeaveFor(
+    const org = await this.prisma.organization.findUnique({
+      where: { id: organizationId },
+      select: { attendanceHalfDayThreshold: true, attendanceHolidays: true },
+    });
+    const halfDayThreshold = org?.attendanceHalfDayThreshold ?? 5.0;
+    const holidays = org?.attendanceHolidays || [];
+
+    const { attendanceByEmployeeDate, leaveByEmployeeDate } = await this.attendanceAndLeaveFor(
       organizationId,
       [employeeId],
       month,
@@ -189,7 +209,9 @@ export class PayslipService {
       startDate: employee.startDate,
       today: new Date(),
       attendanceByDate: attendanceByEmployeeDate.get(employeeId) ?? new Map(),
-      leaveTypeByDate: leaveTypeByEmployeeDate.get(employeeId) ?? new Map(),
+      leaveByDate: leaveByEmployeeDate.get(employeeId) ?? new Map(),
+      halfDayThreshold,
+      holidays,
     });
 
     const editable = {
@@ -210,25 +232,10 @@ export class PayslipService {
       ...editable,
     });
 
-    const snapshot = {
-      basic: structure.basic,
-      hra: structure.hra,
-      otherAllowance: structure.otherAllowance,
-      daysInMonth: daysInMonth(month),
-      unpaidDays,
-      lopDeduction: amounts.lopDeduction,
-      grossEarnings: amounts.grossEarnings,
-      totalDeductions: amounts.totalDeductions,
-      netSalary: amounts.netSalary,
-    };
-
     const data = {
       ...editable,
       notes: existing?.notes ?? null,
-      status: 'FINALIZED',
-      snapshot,
-      finalizedAt: new Date(),
-      finalizedByUserId: userId,
+      status: 'PENDING_APPROVAL',
     };
 
     const saved = existing
@@ -237,16 +244,164 @@ export class PayslipService {
           data: { id: `pay-${randomUUID().slice(0, 8)}`, organizationId, employeeId, month, ...data },
         });
 
-    await this.notifications.create({
-      userId: employee.userId,
+    const name = `${employee.firstName} ${employee.lastName}`.trim();
+    const periodLabel = new Date(Number(month.split('-')[0]), Number(month.split('-')[1]) - 1, 1).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+
+    await this.approvals.createApproval(
       organizationId,
-      title: 'Your payslip was finalized',
-      body: `${month} · Net ${new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(amounts.netSalary)}`,
-      kind: 'payroll',
-      link: '/dashboard/payslip',
+      employeeId,
+      'Payroll',
+      saved.id,
+      `Payroll Approval: ${name} - ${periodLabel}`,
+      `Basic: ₹${structure.basic.toLocaleString('en-IN')}, Gross: ₹${amounts.grossEarnings.toLocaleString('en-IN')}, Deductions: ₹${amounts.totalDeductions.toLocaleString('en-IN')}, Net Pay: ₹${amounts.netSalary.toLocaleString('en-IN')}.`,
+    );
+
+    // Write audit log
+    await writeAuditLog(this.prisma, {
+      organizationId,
+      userId,
+      action: 'SUBMIT_APPROVAL',
+      resource: 'Payslip',
+      resourceId: saved.id,
+      result: 'ALLOW',
+      details: { month },
     });
 
     return this.oneFor(employee, organizationId, month, saved);
+  }
+
+  async decide(
+    userId: string,
+    organizationId: string,
+    permissions: string[],
+    id: string,
+    decision: 'APPROVED' | 'REJECTED',
+    rejectionReason?: string,
+  ): Promise<PublicPayslip> {
+    if (!permissions.includes('*') && !permissions.includes('payroll.manage') && !permissions.includes('payroll.*') && !permissions.includes('approvals.manage')) {
+      throw new ForbiddenException('You do not have permission to decide on payroll approvals.');
+    }
+
+    const payslip = await this.prisma.payslip.findUnique({ where: { id } });
+    if (!payslip || payslip.organizationId !== organizationId) {
+      throw new NotFoundException('That payslip record no longer exists.');
+    }
+    if (payslip.status !== 'PENDING_APPROVAL') {
+      throw new BadRequestException('That payslip is not pending approval.');
+    }
+
+    const employee = await this.requireEmployeeAnyStatus(payslip.employeeId, organizationId);
+
+    let saved;
+    if (decision === 'APPROVED') {
+      const structures = await this.prisma.salaryStructure.findMany({ where: { organizationId, employeeId: employee.id } });
+      const structure = structureForMonth(structures, payslip.month);
+      if (!structure) {
+        throw new BadRequestException('This employee has no salary structure set up.');
+      }
+
+      const org = await this.prisma.organization.findUnique({
+        where: { id: organizationId },
+        select: { attendanceHalfDayThreshold: true, attendanceHolidays: true },
+      });
+      const halfDayThreshold = org?.attendanceHalfDayThreshold ?? 5.0;
+      const holidays = org?.attendanceHolidays || [];
+
+      const { attendanceByEmployeeDate, leaveByEmployeeDate } = await this.attendanceAndLeaveFor(
+        organizationId,
+        [employee.id],
+        payslip.month,
+      );
+
+      const unpaidDays = computeUnpaidDays({
+        month: payslip.month,
+        startDate: employee.startDate,
+        today: new Date(),
+        attendanceByDate: attendanceByEmployeeDate.get(employee.id) ?? new Map(),
+        leaveByDate: leaveByEmployeeDate.get(employee.id) ?? new Map(),
+        halfDayThreshold,
+        holidays,
+      });
+
+      const amounts = computeAmounts({
+        basic: structure.basic,
+        hra: structure.hra,
+        otherAllowance: structure.otherAllowance,
+        daysInMonth: daysInMonth(payslip.month),
+        unpaidDays,
+        bonus: payslip.bonus,
+        incentive: payslip.incentive,
+        reimbursement: payslip.reimbursement,
+        otherEarnings: payslip.otherEarnings,
+        incomeTax: payslip.incomeTax,
+        otherDeduction: payslip.otherDeduction,
+      });
+
+      const snapshot = {
+        basic: structure.basic,
+        hra: structure.hra,
+        otherAllowance: structure.otherAllowance,
+        daysInMonth: daysInMonth(payslip.month),
+        unpaidDays,
+        lopDeduction: amounts.lopDeduction,
+        grossEarnings: amounts.grossEarnings,
+        totalDeductions: amounts.totalDeductions,
+        netSalary: amounts.netSalary,
+      };
+
+      saved = await this.prisma.payslip.update({
+        where: { id },
+        data: {
+          status: 'FINALIZED',
+          snapshot,
+          finalizedAt: new Date(),
+          finalizedByUserId: userId,
+        },
+      });
+
+      await this.notifications.create({
+        userId: employee.userId,
+        organizationId,
+        title: 'Your payslip was finalized',
+        body: `${payslip.month} · Net ${new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(amounts.netSalary)}`,
+        kind: 'payroll',
+        link: '/dashboard/payslip',
+      });
+    } else {
+      saved = await this.prisma.payslip.update({
+        where: { id },
+        data: {
+          status: 'DRAFT',
+          notes: rejectionReason ? `Rejected: ${rejectionReason}. ${payslip.notes || ''}` : payslip.notes,
+        },
+      });
+
+      const membership = await this.prisma.membership.findFirst({
+        where: { organizationId, permissions: { has: 'payroll.manage' } },
+      });
+      if (membership) {
+        await this.notifications.create({
+          userId: membership.userId,
+          organizationId,
+          title: `Payslip rejected for ${employee.firstName} ${employee.lastName}`,
+          body: rejectionReason ? `Reason: ${rejectionReason}` : `The payslip for ${payslip.month} was rejected.`,
+          kind: 'payroll',
+          link: `/dashboard/payroll?tab=monthly`,
+        });
+      }
+    }
+
+    await writeAuditLog(this.prisma, {
+      organizationId,
+      userId,
+      action: decision,
+      resource: 'Payslip',
+      resourceId: id,
+      result: 'ALLOW',
+      details: { decision, rejectionReason },
+    });
+
+    return this.oneFor(employee, organizationId, payslip.month, saved);
   }
 
   /** Self-service: the caller's own FINALIZED payslip for the month, or []. */
@@ -279,7 +434,14 @@ export class PayslipService {
     const structures = await this.prisma.salaryStructure.findMany({ where: { organizationId, employeeId: employee.id } });
     const structure = structureForMonth(structures, month);
 
-    const { attendanceByEmployeeDate, leaveTypeByEmployeeDate } = await this.attendanceAndLeaveFor(
+    const org = await this.prisma.organization.findUnique({
+      where: { id: organizationId },
+      select: { attendanceHalfDayThreshold: true, attendanceHolidays: true },
+    });
+    const halfDayThreshold = org?.attendanceHalfDayThreshold ?? 5.0;
+    const holidays = org?.attendanceHolidays || [];
+
+    const { attendanceByEmployeeDate, leaveByEmployeeDate } = await this.attendanceAndLeaveFor(
       organizationId,
       [employee.id],
       month,
@@ -291,10 +453,12 @@ export class PayslipService {
 
     return this.toPublic(employee, structure, saved, {
       attendanceByDate: attendanceByEmployeeDate.get(employee.id) ?? new Map(),
-      leaveTypeByDate: leaveTypeByEmployeeDate.get(employee.id) ?? new Map(),
+      leaveByDate: leaveByEmployeeDate.get(employee.id) ?? new Map(),
       today: new Date(),
       month,
       finalizedByName,
+      halfDayThreshold,
+      holidays,
     });
   }
 
@@ -316,10 +480,12 @@ export class PayslipService {
     } | null,
     ctx: {
       attendanceByDate: Map<string, { checkIn: Date | null; checkOut: Date | null }>;
-      leaveTypeByDate: Map<string, string>;
+      leaveByDate: Map<string, { type: string; isHalfDay: boolean }>;
       today: Date;
       month: string;
       finalizedByName: string | null;
+      halfDayThreshold?: number | null;
+      holidays?: string[];
     },
   ): PublicPayslip {
     const name = `${employee.firstName} ${employee.lastName}`.trim();
@@ -371,7 +537,9 @@ export class PayslipService {
       startDate: employee.startDate,
       today: ctx.today,
       attendanceByDate: ctx.attendanceByDate,
-      leaveTypeByDate: ctx.leaveTypeByDate,
+      leaveByDate: ctx.leaveByDate,
+      halfDayThreshold: ctx.halfDayThreshold,
+      holidays: ctx.holidays,
     });
 
     const editable = {
@@ -402,7 +570,7 @@ export class PayslipService {
       department: employee.department,
       designation: employee.jobTitle,
       month: ctx.month,
-      status: 'DRAFT',
+      status: (saved?.status as any) ?? 'DRAFT',
       hasSalaryStructure: structure !== null,
       basic,
       hra,
@@ -423,9 +591,9 @@ export class PayslipService {
   /** Batched attendance + approved-leave lookup for a set of employees over one month. */
   private async attendanceAndLeaveFor(organizationId: string, employeeIds: string[], month: string) {
     const attendanceByEmployeeDate = new Map<string, Map<string, { checkIn: Date | null; checkOut: Date | null }>>();
-    const leaveTypeByEmployeeDate = new Map<string, Map<string, string>>();
+    const leaveByEmployeeDate = new Map<string, Map<string, { type: string; isHalfDay: boolean }>>();
 
-    if (employeeIds.length === 0) return { attendanceByEmployeeDate, leaveTypeByEmployeeDate };
+    if (employeeIds.length === 0) return { attendanceByEmployeeDate, leaveByEmployeeDate };
 
     const total = daysInMonth(month);
     const monthStart = `${month}-01`;
@@ -450,14 +618,16 @@ export class PayslipService {
       },
     });
     for (const req of leaveRequests) {
-      const bucket = leaveTypeByEmployeeDate.get(req.employeeId) ?? new Map();
+      const bucket = leaveByEmployeeDate.get(req.employeeId) ?? new Map();
       for (let d = new Date(`${req.startDate}T00:00:00`); isoDate(d) <= req.endDate; d.setDate(d.getDate() + 1)) {
         const iso = isoDate(d);
-        if (iso >= monthStart && iso <= monthEnd) bucket.set(iso, req.type);
+        if (iso >= monthStart && iso <= monthEnd) {
+          bucket.set(iso, { type: req.type, isHalfDay: req.isHalfDay });
+        }
       }
-      leaveTypeByEmployeeDate.set(req.employeeId, bucket);
+      leaveByEmployeeDate.set(req.employeeId, bucket);
     }
 
-    return { attendanceByEmployeeDate, leaveTypeByEmployeeDate };
+    return { attendanceByEmployeeDate, leaveByEmployeeDate };
   }
 }

@@ -46,7 +46,7 @@ export class TravelController {
     @Body() dto: UpdateTravelBookingDto,
   ) {
     const membership = requireMembership(m);
-    return this.travelService.updateBooking(id, membership.organizationId, membership.permissions, dto);
+    return this.travelService.updateBooking(id, membership.organizationId, membership.userId, membership.permissions, dto);
   }
 
   @Patch(':id/cancel')

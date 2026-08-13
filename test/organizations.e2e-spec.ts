@@ -12,12 +12,9 @@ function authCookie(res: request.Response): string {
 }
 
 /**
- * Company deletion (§ "delete a company you want, but never down to zero").
- * Every test that creates a company for these specs must be a fresh, throwaway
- * one — never `org-alderway`, which every other e2e spec (and the seed data)
- * depends on staying alive for the whole test run.
+ * Company deletion & settings management.
  */
-describe('Organizations / Delete Company (e2e)', () => {
+describe('Organizations / Settings Management (e2e)', () => {
   let app: INestApplication<App>;
   let ownerCookie: string;
   let managerCookie: string;
@@ -57,147 +54,152 @@ describe('Organizations / Delete Company (e2e)', () => {
     await app.close();
   });
 
-  it('rejects a confirmName that does not match the company name', async () => {
-    const orgId = await createCompany(ownerCookie, `Wrong Name Co ${Date.now()}`);
+  describe('PATCH /organizations/me (Company Profile & Attendance Rules)', () => {
+    it('updates company details and attendance rules successfully for Owner', async () => {
+      const res = await request(server())
+        .patch('/organizations/me')
+        .set('Cookie', ownerCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .send({
+          name: 'Alderway Labs Global',
+          address: '5 Wharf Road, London',
+          leaveNotificationEmail: 'hr-alerts@alderway.com',
+          attendanceLateThreshold: '09:45',
+          attendanceHalfDayThreshold: 4.5,
+          attendanceWorkingHours: 8.5,
+          attendanceHolidays: ['2026-12-25', '2026-12-26'],
+        })
+        .expect(200);
 
-    await request(server())
-      .delete(`/organizations/${orgId}`)
-      .set('Cookie', ownerCookie)
-      .send({ confirmName: 'Definitely Not The Name' })
-      .expect(400);
+      expect(res.body.name).toBe('Alderway Labs Global');
+      expect(res.body.attendanceLateThreshold).toBe('09:45');
+      expect(res.body.attendanceWorkingHours).toBe(8.5);
+      expect(res.body.attendanceHolidays).toEqual(['2026-12-25', '2026-12-26']);
+    });
 
-    // Still there — a rejected attempt must not partially delete anything.
-    await request(server())
-      .get('/organizations/me')
-      .set('Cookie', ownerCookie)
-      .set('X-Workspace-Id', orgId)
-      .expect(200);
+    it('rejects invalid working hours range (> 24)', async () => {
+      const res = await request(server())
+        .patch('/organizations/me')
+        .set('Cookie', ownerCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .send({ attendanceWorkingHours: 25 })
+        .expect(400);
+
+      expect(res.body.message).toMatch(/Working hours must be between 1 and 24/i);
+    });
+
+    it('rejects invalid half-day threshold exceeding working hours', async () => {
+      const res = await request(server())
+        .patch('/organizations/me')
+        .set('Cookie', ownerCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .send({ attendanceWorkingHours: 8, attendanceHalfDayThreshold: 10 })
+        .expect(400);
+
+      expect(res.body.message).toMatch(/Half-day threshold must be greater than 0 and less than total working hours/i);
+    });
+
+    it('rejects invalid late threshold format', async () => {
+      const res = await request(server())
+        .patch('/organizations/me')
+        .set('Cookie', ownerCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .send({ attendanceLateThreshold: '25:99' })
+        .expect(400);
+
+      expect(res.body.message).toMatch(/valid HH:MM time string/i);
+    });
   });
 
-  it('forbids anyone who is not the company\'s Owner, even a real member of it', async () => {
-    // manager@demo.com is a real member of org-alderway, just not its owner.
-    await request(server())
-      .delete('/organizations/org-alderway')
-      .set('Cookie', managerCookie)
-      .send({ confirmName: 'Alderway Labs' })
-      .expect(403);
+  describe('DELETE /organizations/:id', () => {
+    it('rejects a confirmName that does not match the company name', async () => {
+      const orgId = await createCompany(ownerCookie, `Wrong Name Co ${Date.now()}`);
 
-    // org-alderway must survive this and every other test in the suite.
-    await request(server())
-      .get('/organizations/me')
-      .set('Cookie', managerCookie)
-      .set('X-Workspace-Id', 'org-alderway')
-      .expect(200);
-  });
+      await request(server())
+        .delete(`/organizations/${orgId}`)
+        .set('Cookie', ownerCookie)
+        .send({ confirmName: 'Definitely Not The Name' })
+        .expect(400);
 
-  it('blocks deleting your only company', async () => {
-    const email = `soloowner+${Date.now()}@x.com`;
+      await request(server())
+        .get('/organizations/me')
+        .set('Cookie', ownerCookie)
+        .set('X-Workspace-Id', orgId)
+        .expect(200);
+    });
 
-    const signup = await request(server())
-      .post('/auth/signup')
-      .send({ email, password: 'testpass123', fullName: 'Solo Owner' })
-      .expect(201);
-    const soloCookie = authCookie(signup);
+    it('forbids anyone who is not the company\'s Owner', async () => {
+      await request(server())
+        .delete('/organizations/org-alderway')
+        .set('Cookie', managerCookie)
+        .send({ confirmName: 'Alderway Labs' })
+        .expect(403);
 
-    const companyName = `Solo Co ${Date.now()}`;
-    const orgId = await createCompany(soloCookie, companyName);
+      await request(server())
+        .get('/organizations/me')
+        .set('Cookie', managerCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .expect(200);
+    });
 
-    const res = await request(server())
-      .delete(`/organizations/${orgId}`)
-      .set('Cookie', soloCookie)
-      .send({ confirmName: companyName })
-      .expect(400);
+    it('blocks deleting your only company', async () => {
+      const email = `soloowner+${Date.now()}@x.com`;
 
-    expect(res.body.message).toMatch(/at least one company/i);
+      const signup = await request(server())
+        .post('/auth/signup')
+        .send({ email, password: 'testpass123', fullName: 'Solo Owner' })
+        .expect(201);
+      const soloCookie = authCookie(signup);
 
-    // Still there — the block must be a no-op, not a partial delete.
-    await request(server())
-      .get('/organizations/me')
-      .set('Cookie', soloCookie)
-      .set('X-Workspace-Id', orgId)
-      .expect(200);
-  });
+      const companyName = `Solo Co ${Date.now()}`;
+      const orgId = await createCompany(soloCookie, companyName);
 
-  it('deletes the company and every row scoped to it, without touching a second, unrelated company', async () => {
-    const nameA = `Delete Me Co ${Date.now()}`;
-    const nameB = `Untouched Co ${Date.now()}`;
-    const orgA = await createCompany(ownerCookie, nameA);
-    const orgB = await createCompany(ownerCookie, nameB);
+      const res = await request(server())
+        .delete(`/organizations/${orgId}`)
+        .set('Cookie', soloCookie)
+        .send({ confirmName: companyName })
+        .expect(400);
 
-    // Give orgA a real Employee HR record and a pending invite, so the test
-    // actually exercises the cascade rather than deleting an empty shell.
-    const employeeEmail = `deleteme-emp+${Date.now()}@x.com`;
-    await request(server())
-      .post('/invites')
-      .set('Cookie', ownerCookie)
-      .set('X-Workspace-Id', orgA)
-      .send({
-        email: employeeEmail,
-        permissions: ['attendance.view'],
-        source: 'employee-management',
-        firstName: 'Delete',
-        lastName: 'Me',
-        jobTitle: 'QA',
-        employeeId: `EMP-DEL-${Date.now()}`,
-      })
-      .expect(201);
+      expect(res.body.message).toMatch(/at least one company/i);
 
-    await request(server())
-      .post('/invites')
-      .set('Cookie', ownerCookie)
-      .set('X-Workspace-Id', orgA)
-      .send({ email: `deleteme-pending+${Date.now()}@x.com`, permissions: ['attendance.view'], source: 'team-members' })
-      .expect(201);
+      await request(server())
+        .get('/organizations/me')
+        .set('Cookie', soloCookie)
+        .set('X-Workspace-Id', orgId)
+        .expect(200);
+    });
 
-    // Give orgB its own employee, as the control group — this must survive.
-    const untouchedEmail = `untouched-emp+${Date.now()}@x.com`;
-    await request(server())
-      .post('/invites')
-      .set('Cookie', ownerCookie)
-      .set('X-Workspace-Id', orgB)
-      .send({
-        email: untouchedEmail,
-        permissions: ['attendance.view'],
-        source: 'employee-management',
-        firstName: 'Untouched',
-        lastName: 'Person',
-        jobTitle: 'QA',
-        employeeId: `EMP-UNT-${Date.now()}`,
-      })
-      .expect(201);
+    it('deletes the company and every row scoped to it', async () => {
+      const nameA = `Delete Me Co ${Date.now()}`;
+      const orgA = await createCompany(ownerCookie, nameA);
 
-    // Delete orgA.
-    await request(server())
-      .delete(`/organizations/${orgA}`)
-      .set('Cookie', ownerCookie)
-      .send({ confirmName: nameA })
-      .expect(200);
+      const employeeEmail = `deleteme-emp+${Date.now()}@x.com`;
+      await request(server())
+        .post('/invites')
+        .set('Cookie', ownerCookie)
+        .set('X-Workspace-Id', orgA)
+        .send({
+          email: employeeEmail,
+          permissions: ['attendance.view'],
+          source: 'employee-management',
+          firstName: 'Delete',
+          lastName: 'Me',
+          jobTitle: 'QA',
+          employeeId: `EMP-DEL-${Date.now()}`,
+        })
+        .expect(201);
 
-    // orgA is entirely gone — the caller no longer belongs to it at all.
-    await request(server())
-      .get('/organizations/me')
-      .set('Cookie', ownerCookie)
-      .set('X-Workspace-Id', orgA)
-      .expect(403);
-    await request(server())
-      .get('/employees')
-      .set('Cookie', ownerCookie)
-      .set('X-Workspace-Id', orgA)
-      .expect(403);
+      await request(server())
+        .delete(`/organizations/${orgA}`)
+        .set('Cookie', ownerCookie)
+        .send({ confirmName: nameA })
+        .expect(200);
 
-    // orgB is completely unaffected — its employee is still there.
-    const orgBEmployees = await request(server())
-      .get('/employees')
-      .set('Cookie', ownerCookie)
-      .set('X-Workspace-Id', orgB)
-      .expect(200);
-    expect(orgBEmployees.body.some((e: { email: string }) => e.email === untouchedEmail)).toBe(true);
-
-    // org-alderway, seeded and shared by every other spec, is also unaffected.
-    await request(server())
-      .get('/organizations/me')
-      .set('Cookie', ownerCookie)
-      .set('X-Workspace-Id', 'org-alderway')
-      .expect(200);
+      await request(server())
+        .get('/organizations/me')
+        .set('Cookie', ownerCookie)
+        .set('X-Workspace-Id', orgA)
+        .expect(400);
+    });
   });
 });

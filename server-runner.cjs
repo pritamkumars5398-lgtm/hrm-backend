@@ -1,11 +1,48 @@
 const { MongoMemoryReplSet } = require('mongodb-memory-server');
 const { MongoClient } = require('mongodb');
 const bcrypt = require('bcrypt');
+const net = require('net');
 
 // Pre-calculated bcrypt hash for "demo1234"
 const DEMO_HASH = '$2b$10$S/JdXTN6BjYEEZaW0FBE5OXgZZ/LGyayrkC6fTZN28BhqIXAXAriC';
 
+function checkPortInUse(port) {
+  const check = (host) => {
+    return new Promise((resolve) => {
+      const socket = new net.Socket();
+      socket.setTimeout(200);
+      socket.once('connect', () => {
+        socket.destroy();
+        resolve(true);
+      });
+      socket.once('timeout', () => {
+        socket.destroy();
+        resolve(false);
+      });
+      socket.once('error', () => {
+        socket.destroy();
+        resolve(false);
+      });
+      socket.connect(port, host);
+    });
+  };
+
+  return Promise.all([check('127.0.0.1'), check('::1')]).then(
+    ([res1, res2]) => res1 || res2
+  );
+}
+
 async function main() {
+  const port = Number(process.env.PORT || 3000);
+  const inUse = await checkPortInUse(port);
+  if (inUse) {
+    console.log(`\n================================================================`);
+    console.log(` SUCCESS: Backend server is ALREADY active on http://localhost:${port}`);
+    console.log(` (No second terminal needed. You can close this terminal window).`);
+    console.log(`================================================================\n`);
+    process.exit(0);
+  }
+
   console.log('1. Starting MongoMemoryReplSet...');
   const replSet = await MongoMemoryReplSet.create({
     replSet: { dbName: 'keystone', count: 1 },

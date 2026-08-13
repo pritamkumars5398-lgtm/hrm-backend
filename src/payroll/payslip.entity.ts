@@ -60,10 +60,12 @@ export function computeUnpaidDays(params: {
   startDate: Date;
   today: Date;
   attendanceByDate: Map<string, { checkIn: Date | null; checkOut: Date | null }>;
-  /** date -> leave type, approved leave only. */
-  leaveTypeByDate: Map<string, string>;
+  /** date -> leave request details, approved leave only. */
+  leaveByDate: Map<string, { type: string; isHalfDay: boolean }>;
+  halfDayThreshold?: number | null;
+  holidays?: string[];
 }): number {
-  const { month, startDate, today, attendanceByDate, leaveTypeByDate } = params;
+  const { month, startDate, today, attendanceByDate, leaveByDate, halfDayThreshold, holidays = [] } = params;
   const [year, mon] = month.split('-').map(Number) as [number, number];
   const total = daysInMonth(month);
   const todayISO = isoDate(today);
@@ -78,22 +80,37 @@ export function computeUnpaidDays(params: {
     if (isWeekend(date)) continue;
     if (iso < joinedISO) continue; // not yet joined
     if (iso >= todayISO) continue; // not yet resolved
+    if (holidays.includes(iso)) continue; // public holiday is a paid day off
 
     const record = attendanceByDate.get(iso);
-    const leaveType = leaveTypeByDate.get(iso);
+    const leave = leaveByDate.get(iso);
 
     if (record?.checkIn) {
-      const { status } = deriveStatus(record.checkIn, record.checkOut);
-      if (status === 'HALF_DAY') unpaid += 0.5;
-      continue; // PRESENT / LATE / HALF_DAY are otherwise fully paid
+      const { status } = deriveStatus(record.checkIn, record.checkOut, null, halfDayThreshold, leave?.isHalfDay);
+      if (status === 'HALF_DAY') {
+        unpaid += 0.5;
+      }
+      if (leave?.isHalfDay && leave.type === 'UNPAID') {
+        unpaid += 0.5;
+      }
+      continue;
     }
 
-    if (leaveType) {
-      if (leaveType === 'UNPAID') unpaid += 1;
-      continue; // any other approved leave type is paid
+    if (leave) {
+      if (leave.isHalfDay) {
+        unpaid += 0.5; // absent portion of half-day leave
+        if (leave.type === 'UNPAID') {
+          unpaid += 0.5; // unpaid leave portion of half-day leave
+        }
+      } else {
+        if (leave.type === 'UNPAID') {
+          unpaid += 1.0;
+        }
+      }
+      continue;
     }
 
-    unpaid += 1; // no check-in, no approved leave at all — absent
+    unpaid += 1.0; // no check-in, no approved leave -> absent
   }
 
   return unpaid;

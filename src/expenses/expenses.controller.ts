@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { ExpensesService } from './expenses.service';
 import { CreateExpenseClaimDto } from './dto/expenses.dto';
 import { JwtAuthGuard } from '../common/jwt-auth.guard';
@@ -37,5 +37,14 @@ export class ExpensesController {
   async listAllExpenses(@CurrentMembership() m: Membership | undefined) {
     const membership = requireMembership(m);
     return this.expensesService.listAll(membership.organizationId, membership.permissions);
+  }
+
+  @Patch(':id/reimburse')
+  async reimburseExpense(
+    @CurrentMembership() m: Membership | undefined,
+    @Param('id') id: string,
+  ) {
+    const membership = requireMembership(m);
+    return this.expensesService.reimburseExpense(id, membership.organizationId, membership.userId, membership.permissions);
   }
 }

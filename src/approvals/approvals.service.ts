@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { ModuleRef } from '@nestjs/core';
 import { LeaveService } from '../leave/leave.service';
+import { PayslipService } from '../payroll/payslip.service';
 import type { DecideApprovalDto } from './dto/approvals.dto';
 
 function canDecide(permissions: string[]): boolean {
@@ -129,6 +130,16 @@ export class ApprovalsService {
           dto.status === 'APPROVED' ? 'APPROVED' : 'REJECTED',
           true,
         );
+      } else if (sourceModule === 'Payroll') {
+        const payslipService = this.moduleRef.get(PayslipService, { strict: false });
+        await payslipService.decide(
+          userId,
+          organizationId,
+          permissions,
+          sourceRecordId,
+          dto.status === 'APPROVED' ? 'APPROVED' : 'REJECTED',
+          dto.rejectionReason,
+        );
       } else if (sourceModule === 'Expense') {
         const expense = await this.prisma.expenseClaim.findUnique({ where: { id: sourceRecordId } });
         if (expense && expense.status === 'PENDING') {
@@ -144,6 +155,7 @@ export class ApprovalsService {
             where: { id: sourceRecordId },
             data: {
               status: dto.status,
+              approvedAmount: dto.status === 'APPROVED' ? expense.amount : null,
               rejectionReason: dto.rejectionReason ?? null,
               historyJson: JSON.stringify(history),
             },
@@ -166,7 +178,7 @@ export class ApprovalsService {
           await this.prisma.jobRequisition.update({
             where: { id: sourceRecordId },
             data: {
-              status: dto.status === 'APPROVED' ? 'PUBLISHED' : 'CLOSED',
+              status: dto.status === 'APPROVED' ? 'OPEN' : 'CLOSED',
             },
           });
         }

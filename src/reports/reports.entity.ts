@@ -15,6 +15,10 @@ export type ReportsData = {
   /** Null unless the caller holds `payroll.view`/`payroll.manage`/`*` — never
    *  just `reports.view` (§ Phase 3 §4.6's compound check). */
   payrollCost: number | null;
+  expenseTotal?: number;
+  travelCount?: number;
+  openTicketsCount?: number;
+  totalAssetsCount?: number;
   departments: DepartmentRow[];
   headcountByMonth: Array<{ label: string; value: number }>;
 };
@@ -39,6 +43,18 @@ export function toCsv(data: ReportsData): string {
   lines.push(`${csvField('Leave days taken (approved)')},${data.leaveDaysTaken}`);
   if (data.payrollCost !== null) {
     lines.push(`${csvField('Payroll cost (gross, this month)')},${data.payrollCost}`);
+  }
+  if (data.expenseTotal !== undefined) {
+    lines.push(`${csvField('Expense total (approved/reimbursed)')},${data.expenseTotal}`);
+  }
+  if (data.travelCount !== undefined) {
+    lines.push(`${csvField('Travel requests (approved/booked)')},${data.travelCount}`);
+  }
+  if (data.openTicketsCount !== undefined) {
+    lines.push(`${csvField('Open helpdesk tickets')},${data.openTicketsCount}`);
+  }
+  if (data.totalAssetsCount !== undefined) {
+    lines.push(`${csvField('Registered IT assets')},${data.totalAssetsCount}`);
   }
 
   lines.push('');

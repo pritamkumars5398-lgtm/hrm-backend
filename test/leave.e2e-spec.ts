@@ -441,5 +441,115 @@ describe('Leave Module (e2e)', () => {
       const check = await prisma.leaveRequest.findUnique({ where: { id: leaveId } });
       expect(check?.status).toBe('CANCELLED');
     });
+
+    it('syncs direct leave decisions with approvals module', async () => {
+      // 1. Employee Amit Patel (usr-4) requests leave
+      const leaveRes = await request(server())
+        .post('/leave')
+        .set('Cookie', employeeCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .send({
+          type: 'ANNUAL',
+          startDate: '2026-11-10',
+          endDate: '2026-11-10',
+          reason: 'Direct decide sync test',
+        })
+        .expect(201);
+      
+      const leaveId = leaveRes.body.id;
+
+      // Verify that a PENDING ApprovalRequest is created in the approvals module
+      const approvalPending = await prisma.approvalRequest.findFirst({
+        where: { organizationId: 'org-alderway', sourceModule: 'Leave', sourceRecordId: leaveId },
+      });
+      expect(approvalPending).toBeDefined();
+      expect(approvalPending?.status).toBe('PENDING');
+
+      // 2. Manager Marta (hrCookie) decides (APPROVED) the request directly
+      await request(server())
+        .post(`/leave/${leaveId}/decide`)
+        .set('Cookie', hrCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .send({ decision: 'APPROVED' })
+        .expect(200);
+
+      // Verify that the ApprovalRequest status is updated to APPROVED automatically
+      const approvalApproved = await prisma.approvalRequest.findFirst({
+        where: { id: approvalPending?.id },
+      });
+      expect(approvalApproved?.status).toBe('APPROVED');
+    });
+
+    it('correctly calculates unpaid days in payroll excluding holidays and handling half-day leaves', async () => {
+      // Set up holiday on 2026-07-06 (Monday), halfDayThreshold: 5
+      await prisma.organization.update({
+        where: { id: 'org-alderway' },
+        data: {
+          attendanceHolidays: ['2026-07-06'],
+          attendanceHalfDayThreshold: 5.0,
+        },
+      });
+
+      // Create an approved unpaid half-day leave for emp-4 on 2026-07-07 (Tuesday)
+      const leaveRes1 = await request(server())
+        .post('/leave')
+        .set('Cookie', employeeCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .send({
+          type: 'UNPAID',
+          startDate: '2026-07-07',
+          endDate: '2026-07-07',
+          isHalfDay: true,
+          halfDayPeriod: 'FIRST_HALF',
+          reason: 'Half-day unpaid leave',
+        })
+        .expect(201);
+
+      await request(server())
+        .post(`/leave/${leaveRes1.body.id}/decide`)
+        .set('Cookie', hrCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .send({ decision: 'APPROVED' })
+        .expect(200);
+
+      // Create an approved sick half-day leave for emp-4 on 2026-07-08 (Wednesday)
+      const leaveRes2 = await request(server())
+        .post('/leave')
+        .set('Cookie', employeeCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .send({
+          type: 'SICK',
+          startDate: '2026-07-08',
+          endDate: '2026-07-08',
+          isHalfDay: true,
+          halfDayPeriod: 'FIRST_HALF',
+          reason: 'Half-day sick leave',
+        })
+        .expect(201);
+
+      await request(server())
+        .post(`/leave/${leaveRes2.body.id}/decide`)
+        .set('Cookie', hrCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .send({ decision: 'APPROVED' })
+        .expect(200);
+
+      // Query July 2026 payroll (draft payslip list)
+      const payrollRes = await request(server())
+        .get('/payroll/payslips?month=2026-07')
+        .set('Cookie', ownerCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .expect(200);
+
+      const payslip = payrollRes.body.find((p: any) => p.employeeId === 'emp-4');
+      expect(payslip).toBeDefined();
+      // July 2026 has 23 weekdays.
+      // - 2026-07-06 is a holiday -> skipped (0 unpaid).
+      // - 2026-07-07 is unpaid half-day leave -> 0.5 (leave) + 0.5 (no check-in absent) = 1.0 unpaid.
+      // - 2026-07-08 is sick half-day leave -> 0 (sick) + 0.5 (no check-in absent) = 0.5 unpaid.
+      // - 20 other weekdays have no check-in and no leave -> 20.0 unpaid.
+      // Total unpaidDays should be exactly 21.5.
+      expect(payslip.unpaidDays).toBe(21.5);
+    });
   });
 });

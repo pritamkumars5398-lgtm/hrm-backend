@@ -120,7 +120,21 @@ describe('Expense Claims Module (e2e)', () => {
     let expenseId: string;
     let approvalId: string;
 
-    it('allows an employee to log an expense claim with receipt', async () => {
+    it('rejects claim with zero or negative amount', async () => {
+      await request(server())
+        .post('/expenses')
+        .set('Cookie', employeeCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .send({
+          title: 'Invalid Expense',
+          category: 'Food',
+          amount: -50,
+          claimDate: '2026-08-11',
+        })
+        .expect(400);
+    });
+
+    it('allows an employee to log a valid expense claim with receipt', async () => {
       const res = await request(server())
         .post('/expenses')
         .set('Cookie', employeeCookie)
@@ -141,6 +155,20 @@ describe('Expense Claims Module (e2e)', () => {
       expenseId = res.body.id;
     });
 
+    it('prevents submission of duplicate expense claim', async () => {
+      await request(server())
+        .post('/expenses')
+        .set('Cookie', employeeCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .send({
+          title: 'Client Lunch at Savoy',
+          category: 'Food',
+          amount: 120.5,
+          claimDate: '2026-08-11',
+        })
+        .expect(409);
+    });
+
     it('fetches logged claims list', async () => {
       const res = await request(server())
         .get('/expenses')
@@ -153,8 +181,7 @@ describe('Expense Claims Module (e2e)', () => {
       expect(res.body[0].employeeName).toBe('Amit Patel');
     });
 
-    it('manager rejects claim via approvals, notifying employee', async () => {
-      // 1. Fetch pending approvals to find approvalId
+    it('manager approves claim via approvals, transitioning status to APPROVED and setting approvedAmount', async () => {
       const pendingRes = await request(server())
         .get('/approvals/pending')
         .set('Cookie', hrCookie)
@@ -164,40 +191,52 @@ describe('Expense Claims Module (e2e)', () => {
       expect(pendingRes.body.length).toBe(1);
       approvalId = pendingRes.body[0].id;
 
-      // 2. Reject claim
       await request(server())
         .patch(`/approvals/${approvalId}/decide`)
         .set('Cookie', hrCookie)
         .set('X-Workspace-Id', 'org-alderway')
         .send({
-          status: 'REJECTED',
-          rejectionReason: 'Exceeded daily limit for client entertainment.',
+          status: 'APPROVED',
         })
         .expect(200);
 
-      // 3. Verify expense status updated
       const expenseRes = await request(server())
         .get('/expenses')
         .set('Cookie', employeeCookie)
         .set('X-Workspace-Id', 'org-alderway')
         .expect(200);
 
-      expect(expenseRes.body[0].status).toBe('REJECTED');
-      expect(expenseRes.body[0].rejectionReason).toBe('Exceeded daily limit for client entertainment.');
-      expect(expenseRes.body[0].history.length).toBe(2); // CREATED and REJECTED
+      expect(expenseRes.body[0].status).toBe('APPROVED');
+      expect(expenseRes.body[0].approvedAmount).toBe(120.5);
+      expect(expenseRes.body[0].reimbursedAmount).toBeNull();
     });
 
-    it('triggers a notification to employee upon rejection', async () => {
+    it('allows HR/Finance to reimburse approved claim, setting status to REIMBURSED', async () => {
+      const reimburseRes = await request(server())
+        .patch(`/expenses/${expenseId}/reimburse`)
+        .set('Cookie', hrCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .expect(200);
+
+      expect(reimburseRes.body.status).toBe('REIMBURSED');
+      expect(reimburseRes.body.reimbursedAmount).toBe(120.5);
+
+      // Verify invariant: Claimed Amount (120.5) >= Approved Amount (120.5) >= Reimbursed Amount (120.5)
+      expect(reimburseRes.body.amount).toBeGreaterThanOrEqual(reimburseRes.body.approvedAmount);
+      expect(reimburseRes.body.approvedAmount).toBeGreaterThanOrEqual(reimburseRes.body.reimbursedAmount);
+    });
+
+    it('triggers a notification to employee upon reimbursement', async () => {
       const notifyRes = await request(server())
         .get('/notifications')
         .set('Cookie', employeeCookie)
         .set('X-Workspace-Id', 'org-alderway')
         .expect(200);
 
-      const rejectNotification = notifyRes.body.notifications.find(
-        (n: any) => n.kind === 'expense' && n.title.includes('Rejected'),
+      const reimburseNotification = notifyRes.body.notifications.find(
+        (n: any) => n.kind === 'employee' && n.title.includes('Reimbursed'),
       );
-      expect(rejectNotification).toBeDefined();
+      expect(reimburseNotification).toBeDefined();
     });
   });
 });

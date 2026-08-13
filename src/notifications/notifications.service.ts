@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { sendPushToTokens } from '../common/firebase-admin';
+import { writeAuditLog } from '../common/audit-log';
 import { NotificationsGateway } from './notifications.gateway';
 import { toPublicNotification, type PublicNotification } from './notification.entity';
 
@@ -101,6 +102,16 @@ export class NotificationsService {
     await this.prisma.notification.updateMany({
       where: { userId, organizationId, read: false },
       data: { read: true },
+    });
+
+    await writeAuditLog(this.prisma, {
+      organizationId,
+      userId,
+      action: 'UPDATE',
+      resource: 'Notification',
+      resourceId: `all-${userId}`,
+      result: 'ALLOW',
+      details: { action: 'MARK_ALL_READ' },
     });
   }
 

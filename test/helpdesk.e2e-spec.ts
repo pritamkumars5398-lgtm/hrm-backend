@@ -117,7 +117,7 @@ describe('Helpdesk Tickets Module (e2e)', () => {
   describe('Helpdesk Ticket Lifecycle', () => {
     let ticketId: string;
 
-    it('allows employee to create a ticket', async () => {
+    it('allows employee to create a ticket with formatted ticketNo', async () => {
       const res = await request(server())
         .post('/helpdesk')
         .set('Cookie', employeeCookie)
@@ -131,6 +131,7 @@ describe('Helpdesk Tickets Module (e2e)', () => {
         .expect(201);
 
       expect(res.body.id).toBeDefined();
+      expect(res.body.ticketNo).toMatch(/^HD-2026-\d{4}$/);
       expect(res.body.status).toBe('OPEN');
       expect(res.body.subject).toBe('Broken Office Chair');
 
@@ -180,6 +181,34 @@ describe('Helpdesk Tickets Module (e2e)', () => {
 
       expect(res.body.status).toBe('RESOLVED');
       expect(res.body.resolution).toBe('Replaced with a spare ergonomic chair from stock.');
+    });
+
+    it('allows closing the ticket and enforces transition rules on closed tickets', async () => {
+      // Close ticket
+      await request(server())
+        .patch(`/helpdesk/${ticketId}/status`)
+        .set('Cookie', hrCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .send({ status: 'CLOSED' })
+        .expect(200);
+
+      // Reopening directly to RESOLVED should fail
+      await request(server())
+        .patch(`/helpdesk/${ticketId}/status`)
+        .set('Cookie', hrCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .send({ status: 'RESOLVED' })
+        .expect(400);
+
+      // Reopening to IN_PROGRESS should succeed
+      const res = await request(server())
+        .patch(`/helpdesk/${ticketId}/status`)
+        .set('Cookie', hrCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .send({ status: 'IN_PROGRESS' })
+        .expect(200);
+
+      expect(res.body.status).toBe('IN_PROGRESS');
     });
   });
 });

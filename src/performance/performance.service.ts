@@ -5,6 +5,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { quarterFor, type PublicPerformanceData, type PublicPerformanceRecord, type PublicReview } from './performance.entity';
 import type { CreateGoalDto } from './dto/create-goal.dto';
 import type { SubmitReviewDto } from './dto/submit-review.dto';
+import { writeAuditLog } from '../common/audit-log';
 
 /** Mirrors PermissionsGuard's own matching (§ same pattern as Leave's canApprove). */
 function canManage(permissions: string[]): boolean {
@@ -199,7 +200,7 @@ export class PerformanceService {
       throw new ConflictException('This person has already been reviewed for this cycle.');
     }
 
-    await this.prisma.review.create({
+    const review = await this.prisma.review.create({
       data: {
         id: `rev-${randomUUID().slice(0, 8)}`,
         organizationId,
@@ -209,6 +210,16 @@ export class PerformanceService {
         summary: dto.summary.trim(),
         reviewerUserId: userId,
       },
+    });
+
+    await writeAuditLog(this.prisma, {
+      organizationId,
+      userId,
+      action: 'CREATE',
+      resource: 'Review',
+      resourceId: review.id,
+      result: 'ALLOW',
+      details: { rating: dto.rating },
     });
 
     await this.notifications.create({
@@ -241,7 +252,7 @@ export class PerformanceService {
 
     const cycle = await this.currentCycle(organizationId);
 
-    await this.prisma.goal.create({
+    const goal = await this.prisma.goal.create({
       data: {
         id: `goal-${randomUUID().slice(0, 8)}`,
         organizationId,
@@ -251,6 +262,16 @@ export class PerformanceService {
         dueOn: dto.dueOn,
         progress: 0,
       },
+    });
+
+    await writeAuditLog(this.prisma, {
+      organizationId,
+      userId,
+      action: 'CREATE',
+      resource: 'Goal',
+      resourceId: goal.id,
+      result: 'ALLOW',
+      details: { title: dto.title },
     });
 
     await this.notifications.create({
@@ -302,6 +323,16 @@ export class PerformanceService {
     }
 
     await this.prisma.goal.update({ where: { id: goalId }, data: { progress } });
+
+    await writeAuditLog(this.prisma, {
+      organizationId,
+      userId,
+      action: 'UPDATE',
+      resource: 'Goal',
+      resourceId: goalId,
+      result: 'ALLOW',
+      details: { progress },
+    });
 
     // Only worth telling anyone about when the employee updates their own
     // progress — a manager/owner editing it is something they just did

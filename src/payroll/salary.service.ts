@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { structureForMonth, toPublicSalaryStructure, type PublicSalaryStructure } from './salary.entity';
 import type { UpsertSalaryStructureDto } from './dto/upsert-salary-structure.dto';
+import { writeAuditLog } from '../common/audit-log';
 
 export type CompanySalaryRow = {
   employeeId: string;
@@ -149,6 +150,16 @@ export class SalaryService {
             ...data,
           },
         });
+
+    await writeAuditLog(this.prisma, {
+      organizationId,
+      userId,
+      action: 'UPSERT',
+      resource: 'SalaryStructure',
+      resourceId: record.id,
+      result: 'ALLOW',
+      details: { effectiveFrom: dto.effectiveFrom },
+    });
 
     return toPublicSalaryStructure(record);
   }

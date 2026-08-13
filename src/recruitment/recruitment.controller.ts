@@ -24,7 +24,16 @@ export class RecruitmentController {
     @Body() dto: CreateJobDto,
   ) {
     const membership = requireMembership(m);
-    return this.recruitmentService.createJob(membership.organizationId, membership.permissions, dto);
+    return this.recruitmentService.createJob(membership.organizationId, membership.userId, membership.permissions, dto);
+  }
+
+  @Post('jobs/:id/submit')
+  async submitRequisition(
+    @CurrentMembership() m: Membership | undefined,
+    @Param('id') id: string,
+  ) {
+    const membership = requireMembership(m);
+    return this.recruitmentService.submitRequisition(id, membership.organizationId, membership.userId, membership.permissions);
   }
 
   @Get('jobs')
@@ -39,7 +48,7 @@ export class RecruitmentController {
     @Body() dto: CreateCandidateDto,
   ) {
     const membership = requireMembership(m);
-    return this.recruitmentService.createCandidate(membership.organizationId, membership.permissions, dto);
+    return this.recruitmentService.createCandidate(membership.organizationId, membership.userId, membership.permissions, dto);
   }
 
   @Get('candidates')

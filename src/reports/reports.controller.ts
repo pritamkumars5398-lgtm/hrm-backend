@@ -16,13 +16,13 @@ export class ReportsController {
   @Get()
   @RequirePermission('reports.view')
   get(@CurrentMembership() membership: Membership): Promise<ReportsData> {
-    return this.reportsService.get(membership.organizationId, membership.permissions);
+    return this.reportsService.get(membership.organizationId, membership.userId, membership.permissions);
   }
 
   @Get('export')
   @RequirePermission('reports.view')
   async export(@CurrentMembership() membership: Membership, @Res({ passthrough: true }) res: Response): Promise<string> {
-    const data = await this.reportsService.get(membership.organizationId, membership.permissions);
+    const data = await this.reportsService.export(membership.organizationId, membership.userId, membership.permissions);
     res.header('Content-Type', 'text/csv; charset=utf-8');
     res.header('Content-Disposition', 'attachment; filename="reports.csv"');
     return toCsv(data);

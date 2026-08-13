@@ -117,15 +117,30 @@ describe('Assets Module (e2e)', () => {
         .send({
           name: 'MacBook Pro M3 Max 16"',
           category: 'Laptop',
+          assetTag: 'AST-LAP-001',
           serialNumber: 'SN-MBP-2026',
         })
         .expect(201);
 
       expect(res.body.id).toBeDefined();
       expect(res.body.name).toBe('MacBook Pro M3 Max 16"');
+      expect(res.body.assetTag).toBe('AST-LAP-001');
       expect(res.body.status).toBe('AVAILABLE');
 
       assetId = res.body.id;
+    });
+
+    it('prevents creation of duplicate asset tag in same organization', async () => {
+      await request(server())
+        .post('/assets')
+        .set('Cookie', hrCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .send({
+          name: 'Another MacBook',
+          category: 'Laptop',
+          assetTag: 'AST-LAP-001',
+        })
+        .expect(409);
     });
 
     it('allows HR to list assets', async () => {
@@ -155,7 +170,19 @@ describe('Assets Module (e2e)', () => {
       expect(res.body.assignedToId).toBe('emp-4');
     });
 
-    it('lists asset with assigned employee name resolved', async () => {
+    it('allows employee to view their assigned assets via my-assets endpoint', async () => {
+      const res = await request(server())
+        .get('/assets/my-assets')
+        .set('Cookie', employeeCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .expect(200);
+
+      expect(res.body.length).toBe(1);
+      expect(res.body[0].id).toBe(assetId);
+      expect(res.body[0].assignedTo).toBe('Amit Patel');
+    });
+
+    it('lists asset with assigned employee name resolved for HR', async () => {
       const res = await request(server())
         .get('/assets')
         .set('Cookie', hrCookie)
