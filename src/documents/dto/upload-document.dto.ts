@@ -1,4 +1,4 @@
-import { IsIn, IsString, MinLength } from 'class-validator';
+import { IsIn, IsOptional, IsString, MinLength } from 'class-validator';
 import { DOCUMENT_CATEGORIES, type DocumentCategory } from '../document.entity';
 
 export class UploadDocumentDto {
@@ -12,4 +12,8 @@ export class UploadDocumentDto {
 
   @IsIn(DOCUMENT_CATEGORIES)
   category!: DocumentCategory;
+
+  @IsString()
+  @IsOptional()
+  employeeId?: string;
 }

@@ -3,6 +3,8 @@ import type { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { ModuleRef } from '@nestjs/core';
+import { ComplianceService } from '../compliance/compliance.service';
 import { deleteCompanyDocument, uploadCompanyDocument } from '../common/cloudinary-upload';
 import { DOCUMENT_CATEGORIES, toPublicDocument, type DocumentCategory, type PublicDocument } from './document.entity';
 import type { UploadDocumentDto } from './dto/upload-document.dto';
@@ -48,6 +50,7 @@ export class DocumentsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
+    private readonly moduleRef: ModuleRef,
   ) {}
 
   /** Same `deletedAt: null` caveat as Employees — filtered in code, not the query. */
@@ -104,6 +107,7 @@ export class DocumentsService {
       data: {
         id: `doc-${randomUUID().slice(0, 8)}`,
         organizationId,
+        employeeId: dto.employeeId ?? null,
         name: dto.name.trim(),
         description: dto.description.trim(),
         category: dto.category,
@@ -115,6 +119,23 @@ export class DocumentsService {
         uploadedByUserId,
       },
     });
+
+    if (dto.employeeId) {
+      try {
+        const complianceService = this.moduleRef.get(ComplianceService, { strict: false });
+        const obligations = await this.prisma.complianceObligation.findMany({
+          where: { organizationId, targetType: 'EMPLOYEE', targetId: dto.employeeId },
+        });
+        for (const obl of obligations) {
+          const req = await this.prisma.complianceRequirement.findUnique({ where: { id: obl.requirementId } });
+          if (req && req.category === 'DOCUMENT') {
+            await complianceService.recalculateStatus(obl.id, organizationId);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to trigger compliance recalculation in document upload:', err);
+      }
+    }
 
     const uploader = await this.prisma.user.findUnique({ where: { id: uploadedByUserId }, select: { name: true } });
 

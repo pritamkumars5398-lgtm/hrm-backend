@@ -4,6 +4,8 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
+import { ComplianceService } from '../compliance/compliance.service';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
@@ -42,7 +44,17 @@ export class InvitesService {
     private readonly notifications: NotificationsService,
     private readonly emailService: EmailService,
     private readonly configService: ConfigService,
+    private readonly moduleRef: ModuleRef,
   ) {}
+
+  private async triggerComplianceScan(employeeId: string, organizationId: string) {
+    try {
+      const complianceService = this.moduleRef.get(ComplianceService, { strict: false });
+      await complianceService.evalApplicability(employeeId, organizationId);
+    } catch (err) {
+      console.error('Failed to trigger compliance scan in invites:', err);
+    }
+  }
 
   private linkFor(token: string): string {
     const origin = (this.configService.get<string>('CORS_ORIGINS') ?? 'http://localhost:5173')
@@ -164,6 +176,7 @@ export class InvitesService {
             gender: params.gender ?? existingEmployee.gender,
           },
         });
+        await this.triggerComplianceScan(existingEmployee.id, params.organizationId);
       } else if (!existingEmployee) {
         const newEmp = await this.prisma.employee.create({
           data: {
@@ -189,6 +202,7 @@ export class InvitesService {
           },
         });
         targetEmployeeId = newEmp.id;
+        await this.triggerComplianceScan(newEmp.id, params.organizationId);
       }
 
       // Write Audit Log

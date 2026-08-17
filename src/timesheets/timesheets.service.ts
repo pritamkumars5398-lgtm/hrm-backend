@@ -4,6 +4,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { writeAuditLog } from '../common/audit-log';
 import type { SaveTimesheetDto } from './dto/timesheets.dto';
+import { ModuleRef } from '@nestjs/core';
+import { ComplianceService } from '../compliance/compliance.service';
 
 function canManage(permissions: string[]): boolean {
   return permissions.includes('*') || permissions.includes('timesheets.manage') || permissions.includes('reports.view');
@@ -14,6 +16,7 @@ export class TimesheetsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
+    private readonly moduleRef: ModuleRef,
   ) {}
 
   private async getEmployee(userId: string, organizationId: string) {
@@ -226,6 +229,30 @@ export class TimesheetsService {
         kind: 'employee',
         link: '/dashboard/timesheets',
       });
+    }
+
+    if (status === 'APPROVED') {
+      if (updated.totalHours > 48) {
+        try {
+          const complianceService = this.moduleRef.get(ComplianceService, { strict: false });
+          const obligations = await this.prisma.complianceObligation.findMany({
+            where: { organizationId, targetType: 'EMPLOYEE', targetId: timesheet.employeeId },
+          });
+          for (const obl of obligations) {
+            const req = await this.prisma.complianceRequirement.findUnique({ where: { id: obl.requirementId } });
+            if (req && req.category === 'ATTENDANCE') {
+              await complianceService.triggerViolation(
+                organizationId,
+                obl.id,
+                'OVERTIME_LIMIT_BREACH',
+                `Employee breached weekly work limit: worked ${updated.totalHours} hours (limit is 48 hours) in week starting ${timesheet.weekStartDate}.`,
+              );
+            }
+          }
+        } catch (err) {
+          console.error('Failed to trigger compliance overtime violation:', err);
+        }
+      }
     }
 
     let rows = [];

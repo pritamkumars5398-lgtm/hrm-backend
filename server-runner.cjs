@@ -173,7 +173,9 @@ async function main() {
       'documents.*',
       'reports.view',
       'team.invite',
-      'team.view'
+      'team.view',
+      'payroll.*',
+      'compliance.*'
     ],
     createdAt: new Date(),
   });

@@ -4,10 +4,24 @@ import { PrismaService } from '../prisma/prisma.service';
 import { toPublicEmployee, type PublicEmployee } from './employee.entity';
 import type { UpdateEmployeeDto } from './dto/update-employee.dto';
 import { writeAuditLog } from '../common/audit-log';
+import { ModuleRef } from '@nestjs/core';
+import { ComplianceService } from '../compliance/compliance.service';
 
 @Injectable()
 export class EmployeesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly moduleRef: ModuleRef,
+  ) {}
+
+  private async triggerComplianceScan(employeeId: string, organizationId: string) {
+    try {
+      const complianceService = this.moduleRef.get(ComplianceService, { strict: false });
+      await complianceService.evalApplicability(employeeId, organizationId);
+    } catch (err) {
+      console.error('Failed to trigger compliance scan:', err);
+    }
+  }
 
   /** Every employee record in one company. Never crosses org boundaries (§1). */
   async findByOrganization(organizationId: string, status?: 'ACTIVE' | 'INACTIVE' | 'ALL'): Promise<PublicEmployee[]> {
@@ -131,6 +145,7 @@ export class EmployeesService {
           homeAddress: '',
         },
       });
+      await this.triggerComplianceScan(employee.id, organizationId);
     }
 
     const emailById = await this.emailsFor([employee.userId]);
@@ -194,6 +209,7 @@ export class EmployeesService {
     }
 
     const updated = await this.prisma.employee.update({ where: { id }, data });
+    await this.triggerComplianceScan(updated.id, organizationId);
 
     // Write Audit Log
     await writeAuditLog(this.prisma, {

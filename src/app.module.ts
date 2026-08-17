@@ -23,6 +23,7 @@ import { ExpensesModule } from './expenses/expenses.module';
 import { TravelModule } from './travel/travel.module';
 import { HelpdeskModule } from './helpdesk/helpdesk.module';
 import { OnboardingModule } from './onboarding/onboarding.module';
+import { ComplianceModule } from './compliance/compliance.module';
 import { HealthController } from './health/health.controller';
 
 /**
@@ -57,6 +58,7 @@ import { HealthController } from './health/health.controller';
     TravelModule,
     HelpdeskModule,
     OnboardingModule,
+    ComplianceModule,
   ],
   controllers: [HealthController],
 })

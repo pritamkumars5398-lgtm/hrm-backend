@@ -294,7 +294,7 @@ describe('Team Members / Invites (e2e)', () => {
     // The separate `role === 'OWNER'` guard is defence-in-depth for the day an
     // org can have more than one admin.
     it('forbids removing yourself', async () => {
-      await request(server()).delete('/members/usr-1').set('Cookie', ownerCookie).set('X-Workspace-Id', 'org-alderway').expect(400);
+      await request(server()).delete('/members/usr-2').set('Cookie', ownerCookie).set('X-Workspace-Id', 'org-alderway').expect(400);
     });
 
     it('404s removing a user from another company', async () => {

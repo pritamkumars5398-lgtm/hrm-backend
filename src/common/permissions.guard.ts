@@ -190,6 +190,42 @@ export class PermissionsGuard implements CanActivate {
           resourceMetadata.labels = [resourceData.category];
           resourceMetadata.status = resourceData.status; // DRAFT / PUBLISHED
         }
+      } else if (path.includes('/compliance/obligations') && params.id) {
+        resourceMetadata.resourceType = 'ComplianceObligation';
+        resourceId = params.id;
+        resourceData = await this.prisma.complianceObligation.findUnique({ where: { id: params.id } });
+        if (resourceData) {
+          resourceMetadata.resourceOwner = resourceData.targetId;
+          resourceMetadata.sharingSettings = 'CONFIDENTIAL';
+          resourceMetadata.status = resourceData.status;
+        }
+      } else if (path.includes('/compliance/tasks') && params.id) {
+        resourceMetadata.resourceType = 'ComplianceTask';
+        resourceId = params.id;
+        resourceData = await this.prisma.complianceTask.findUnique({ where: { id: params.id } });
+        if (resourceData) {
+          resourceMetadata.resourceOwner = resourceData.assignedToId;
+          resourceMetadata.sharingSettings = 'RESTRICTED';
+          resourceMetadata.status = resourceData.status;
+        }
+      } else if (path.includes('/compliance/violations') && params.id) {
+        resourceMetadata.resourceType = 'ComplianceViolation';
+        resourceId = params.id;
+        resourceData = await this.prisma.complianceViolation.findUnique({ where: { id: params.id } });
+        if (resourceData) {
+          resourceMetadata.resourceOwner = resourceData.targetId;
+          resourceMetadata.sharingSettings = 'CONFIDENTIAL';
+          resourceMetadata.status = resourceData.status;
+        }
+      } else if (path.includes('/compliance/exceptions') && params.id) {
+        resourceMetadata.resourceType = 'ComplianceException';
+        resourceId = params.id;
+        resourceData = await this.prisma.complianceException.findUnique({ where: { id: params.id } });
+        if (resourceData) {
+          resourceMetadata.resourceOwner = resourceData.requestedById;
+          resourceMetadata.sharingSettings = 'APPROVAL_LOCKED';
+          resourceMetadata.status = resourceData.status;
+        }
       }
     } catch {
       // Graceful fallback for queries
@@ -262,6 +298,26 @@ export class PermissionsGuard implements CanActivate {
             if (myEmployeeRecord && resourceData.employeeId === myEmployeeRecord.id && action === 'READ') {
               isAllowed = true;
               policyDetails = 'ABAC Policy Evaluator: User is the owner of this payslip.';
+            }
+          } else if (resourceMetadata.resourceType === 'ComplianceObligation' && resourceData) {
+            if (myEmployeeRecord && resourceData.targetType === 'EMPLOYEE' && resourceData.targetId === myEmployeeRecord.id && action === 'READ') {
+              isAllowed = true;
+              policyDetails = 'ABAC Policy Evaluator: User is the target of this compliance obligation.';
+            }
+          } else if (resourceMetadata.resourceType === 'ComplianceTask' && resourceData) {
+            if (myEmployeeRecord && resourceData.assignedToId === myEmployeeRecord.id && (action === 'READ' || action === 'UPDATE')) {
+              isAllowed = true;
+              policyDetails = 'ABAC Policy Evaluator: User is assigned to this compliance task.';
+            }
+          } else if (resourceMetadata.resourceType === 'ComplianceViolation' && resourceData) {
+            if (myEmployeeRecord && resourceData.targetType === 'EMPLOYEE' && resourceData.targetId === myEmployeeRecord.id && action === 'READ') {
+              isAllowed = true;
+              policyDetails = 'ABAC Policy Evaluator: User is the subject of this compliance violation.';
+            }
+          } else if (resourceMetadata.resourceType === 'ComplianceException' && resourceData) {
+            if (myEmployeeRecord && resourceData.requestedById === myEmployeeRecord.id && (action === 'READ' || action === 'UPDATE')) {
+              isAllowed = true;
+              policyDetails = 'ABAC Policy Evaluator: User requested this compliance exception.';
             }
           }
 

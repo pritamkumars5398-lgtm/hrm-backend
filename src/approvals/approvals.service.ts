@@ -217,6 +217,18 @@ export class ApprovalsService {
             });
           }
         }
+      } else if (sourceModule === 'ComplianceException') {
+        const exception = await this.prisma.complianceException.findUnique({ where: { id: sourceRecordId } });
+        if (exception && exception.status === 'PENDING') {
+          await this.prisma.complianceException.update({
+            where: { id: sourceRecordId },
+            data: {
+              status: dto.status === 'APPROVED' ? 'APPROVED' : 'REJECTED',
+              approverId: userId,
+              approvalDate: new Date(),
+            },
+          });
+        }
       }
     } catch (err) {
       console.error(`Failed to update original source module for ${sourceModule} ${sourceRecordId}:`, err);

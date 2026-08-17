@@ -290,6 +290,14 @@ model Document {
   updatedAt      DateTime? @updatedAt
   deletedAt      DateTime?
 
+  // Compliance & Verification fields
+  status            String?   // PENDING_VERIFICATION | VERIFIED | REJECTED
+  verifiedByUserId  String?
+  verifiedAt        DateTime?
+  issueDate         String?   // YYYY-MM-DD
+  expiryDate        String?   // YYYY-MM-DD
+  rejectionReason   String?
+
   @@index([organizationId, category])
   @@index([organizationId, employeeId])
 }
@@ -539,5 +547,175 @@ model AuditLog {
   details        String?
   timestamp      DateTime @default(now())
 }
+
+model ComplianceFramework {
+  id             String   @id @map("_id")
+  organizationId String
+  name           String
+  code           String
+  description    String?
+  jurisdiction   String
+  version        String
+  effectiveFrom  String // YYYY-MM-DD
+  effectiveUntil String? // YYYY-MM-DD
+  status         String // DRAFT | ACTIVE | INACTIVE
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([organizationId, code])
+  @@index([organizationId])
+}
+
+model ComplianceRequirement {
+  id                  String   @id @map("_id")
+  organizationId      String
+  frameworkId         String?
+  code                String
+  name                String
+  description         String?
+  category            String // DOCUMENT | POLICY | TRAINING | ATTENDANCE | LEAVE | PAYROLL | ONBOARDING
+  mandatory           Boolean  @default(true)
+  frequency           String // ONCE | MONTHLY | QUARTERLY | ANNUALLY
+  riskLevel           String // LOW | MEDIUM | HIGH | CRITICAL
+  evidenceRequired    Boolean  @default(false)
+  verificationRequired Boolean @default(false)
+  approvalRequired    Boolean  @default(false)
+  responsibleOwnerId  String?
+  applicabilityRules  String // JSON string of rules (e.g. location, dept, type)
+  status              String // DRAFT | ACTIVE | RETIRED
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@unique([organizationId, code])
+  @@index([organizationId, category])
+}
+
+model ComplianceObligation {
+  id              String   @id @map("_id")
+  organizationId  String
+  requirementId   String
+  targetType      String // EMPLOYEE | ORGANIZATION
+  targetId        String // Employee.id or Organization.id
+  status          String // PENDING | IN_PROGRESS | COMPLIANT | EXPIRING_SOON | EXPIRED | NON_COMPLIANT | WAIVED | UNDER_REVIEW | OVERDUE
+  dueDate         String? // YYYY-MM-DD
+  complianceScore Float    @default(0)
+  lastEvaluatedAt DateTime @default(now())
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([targetId, requirementId])
+  @@index([organizationId, status])
+}
+
+model ComplianceTask {
+  id             String   @id @map("_id")
+  organizationId String
+  obligationId   String?
+  assignedToId   String // Employee.id
+  title          String
+  description    String?
+  priority       String // LOW | MEDIUM | HIGH | CRITICAL
+  dueDate        String // YYYY-MM-DD
+  status         String // OPEN | IN_PROGRESS | PENDING_REVIEW | COMPLETED | OVERDUE | BLOCKED | REJECTED | CANCELLED
+  evidenceUrl    String?
+  commentsJson   String   @default("[]")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([organizationId, assignedToId])
+}
+
+model ComplianceViolation {
+  id              String   @id @map("_id")
+  organizationId  String
+  obligationId    String?
+  type            String
+  severity        String // LOW | MEDIUM | HIGH | CRITICAL
+  targetType      String // EMPLOYEE | ORGANIZATION
+  targetId        String
+  description     String
+  detectedDate    String // YYYY-MM-DD
+  ownerId         String? // Employee.id
+  correctiveAction String?
+  dueDate         String? // YYYY-MM-DD
+  evidenceUrl     String?
+  status          String // OPEN | INVESTIGATING | ACTION_REQUIRED | UNDER_REVIEW | RESOLVED | CLOSED
+  historyJson     String   @default("[]")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([organizationId, status])
+}
+
+model ComplianceException {
+  id             String    @id @map("_id")
+  organizationId String
+  obligationId   String
+  requestedById  String // Employee.id
+  reason         String
+  scope          String // FULL | PARTIAL
+  startDate      String // YYYY-MM-DD
+  endDate        String // YYYY-MM-DD
+  approverId     String? // User ID
+  approvalDate   DateTime?
+  status         String // PENDING | APPROVED | REJECTED | EXPIRED
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([organizationId, obligationId])
+}
+
+model ComplianceRisk {
+  id             String   @id @map("_id")
+  organizationId String
+  category       String
+  likelihood     Int // 1 to 5
+  impact         Int // 1 to 5
+  riskScore      Int // likelihood * impact
+  severity       String // LOW | MEDIUM | HIGH | CRITICAL
+  ownerId        String? // Employee.id
+  mitigation     String?
+  status         String // IDENTIFIED | MITIGATED | ACCEPTED | RETIRED
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([organizationId])
+}
+
+model ComplianceSetting {
+  id                      String   @id @map("_id")
+  organizationId          String   @unique
+  statusRulesJson         String   @default("{}")
+  notificationSettingsJson String  @default("{}")
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+}
+
+model PolicyAcknowledgement {
+  id             String   @id @map("_id")
+  organizationId String
+  employeeId     String
+  policyId       String   // Document.id of category Policies
+  version        String   // Document version or upload date
+  acknowledgedAt DateTime @default(now())
+
+  @@unique([employeeId, policyId, version])
+  @@index([organizationId, employeeId])
+}
+
+model CourseAssignment {
+  id             String    @id @map("_id")
+  organizationId String
+  employeeId     String
+  courseId       String
+  progress       Int       @default(0) // 0 to 100
+  status         String    // ASSIGNED | STARTED | COMPLETED | EXPIRED
+  assignedAt     DateTime  @default(now())
+  completedAt    DateTime?
+
+  @@unique([employeeId, courseId])
+  @@index([organizationId, employeeId])
+}
+
 
 

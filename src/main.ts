@@ -118,7 +118,9 @@ async function ensureMongoDB(): Promise<void> {
               'documents.*',
               'reports.view',
               'team.invite',
-              'team.view'
+              'team.view',
+              'payroll.*',
+              'compliance.*'
             ],
             createdAt: new Date()
           },
@@ -206,6 +208,9 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
     logger: ['log', 'warn'], // suppress ERROR logs during port probes
   });
+
+  // Enable graceful shutdown hooks to cleanly disconnect Prisma/MongoDB on SIGTERM/SIGINT
+  app.enableShutdownHooks();
 
   app.use(cookieParser());
 
