@@ -6,6 +6,8 @@ import type { UpdateEmployeeDto } from './dto/update-employee.dto';
 import { writeAuditLog } from '../common/audit-log';
 import { ModuleRef } from '@nestjs/core';
 import { ComplianceService } from '../compliance/compliance.service';
+import { paginate, PaginatedResult } from '../common/pagination';
+import { Employee } from '@prisma/client';
 
 @Injectable()
 export class EmployeesService {
@@ -24,23 +26,80 @@ export class EmployeesService {
   }
 
   /** Every employee record in one company. Never crosses org boundaries (§1). */
-  async findByOrganization(organizationId: string, status?: 'ACTIVE' | 'INACTIVE' | 'ALL'): Promise<PublicEmployee[]> {
-    const all = await this.prisma.employee.findMany({
-      where: { organizationId },
-      orderBy: { createdAt: 'asc' },
+  async findByOrganization(
+    organizationId: string,
+    status?: 'ACTIVE' | 'INACTIVE' | 'ALL',
+    limit?: number | string,
+    cursor?: string,
+  ): Promise<PublicEmployee[] | PaginatedResult<PublicEmployee>> {
+    // If no pagination parameters are requested, fallback to the original backward-compatible full array scan
+    if (limit === undefined && cursor === undefined) {
+      const all = await this.prisma.employee.findMany({
+        where: { organizationId },
+        orderBy: { createdAt: 'asc' },
+      });
+
+      // Filter soft-deleted in code, not in the query: a `{ deletedAt: null }`
+      // Mongo filter does NOT match documents created before the field existed,
+      // which would silently hide the whole directory. On read a missing field
+      // comes back as null, so `!e.deletedAt` correctly keeps active records.
+      const employees = all.filter((e) => {
+        const isInactive = !!e.deletedAt;
+        if (status === 'INACTIVE') return isInactive;
+        if (status === 'ALL') return true;
+        return !isInactive; // Default to ACTIVE
+      });
+
+      const emailById = await this.emailsFor(employees.map((e) => e.userId));
+      const managerNameById = await this.managerNamesFor(employees);
+
+      // Fetch active approved leave requests for today
+      const todayStr = new Date().toISOString().split('T')[0];
+      const activeLeaves = await this.prisma.leaveRequest.findMany({
+        where: {
+          organizationId,
+          status: 'APPROVED',
+          startDate: { lte: todayStr },
+          endDate: { gte: todayStr },
+        },
+        select: { employeeId: true },
+      });
+      const onLeaveEmployeeIds = new Set(activeLeaves.map((l) => l.employeeId));
+
+      return employees.map((e) =>
+        toPublicEmployee(
+          e,
+          emailById.get(e.userId) ?? '',
+          managerNameById.get(e.id) ?? null,
+          onLeaveEmployeeIds.has(e.id),
+        ),
+      );
+    }
+
+    // Otherwise, perform generic cursor pagination in the database
+    const where: any = { organizationId };
+    if (status === 'INACTIVE') {
+      where.deletedAt = { not: null };
+    } else if (status === 'ALL') {
+      // no deletedAt filter
+    } else {
+      // Default to ACTIVE (match both null and unset fields)
+      where.OR = [
+        { deletedAt: null },
+        { deletedAt: { isSet: false } },
+      ];
+    }
+
+    const paginated = await paginate<Employee>(this.prisma.employee, {
+      where,
+      limit,
+      cursor,
+      sortField: 'createdAt',
+      sortDirection: 'asc',
+      organizationId,
     });
 
-    // Filter soft-deleted in code, not in the query: a `{ deletedAt: null }`
-    // Mongo filter does NOT match documents created before the field existed,
-    // which would silently hide the whole directory. On read a missing field
-    // comes back as null, so `!e.deletedAt` correctly keeps active records.
-    const employees = all.filter((e) => {
-      const isInactive = !!e.deletedAt;
-      if (status === 'INACTIVE') return isInactive;
-      if (status === 'ALL') return true;
-      return !isInactive; // Default to ACTIVE
-    });
-
+    const employees = paginated.data;
     const emailById = await this.emailsFor(employees.map((e) => e.userId));
     const managerNameById = await this.managerNamesFor(employees);
 
@@ -52,12 +111,13 @@ export class EmployeesService {
         status: 'APPROVED',
         startDate: { lte: todayStr },
         endDate: { gte: todayStr },
+        employeeId: { in: employees.map((e) => e.id) },
       },
       select: { employeeId: true },
     });
     const onLeaveEmployeeIds = new Set(activeLeaves.map((l) => l.employeeId));
 
-    return employees.map((e) =>
+    const publicEmployees = employees.map((e) =>
       toPublicEmployee(
         e,
         emailById.get(e.userId) ?? '',
@@ -65,6 +125,11 @@ export class EmployeesService {
         onLeaveEmployeeIds.has(e.id),
       ),
     );
+
+    return {
+      data: publicEmployees,
+      pagination: paginated.pagination,
+    };
   }
 
   async findOne(id: string, organizationId: string): Promise<PublicEmployee> {
@@ -144,6 +209,15 @@ export class EmployeesService {
           contactNumber: '',
           homeAddress: '',
         },
+      });
+      await writeAuditLog(this.prisma, {
+        organizationId,
+        userId,
+        action: 'CREATE',
+        resource: 'Employee',
+        resourceId: employee.id,
+        result: 'ALLOW',
+        details: { autoCreated: true, employeeId: employee.employeeId },
       });
       await this.triggerComplianceScan(employee.id, organizationId);
     }
@@ -280,10 +354,19 @@ export class EmployeesService {
    * called when removing someone's Membership, so offboarding retires both
    * their portal access and their HR record together (§1.3).
    */
-  async deactivateForUser(userId: string, organizationId: string): Promise<void> {
+  async deactivateForUser(userId: string, organizationId: string, callerUserId: string): Promise<void> {
     const existing = await this.prisma.employee.findFirst({ where: { userId, organizationId } });
     if (existing && !existing.deletedAt) {
       await this.prisma.employee.update({ where: { id: existing.id }, data: { deletedAt: new Date() } });
+      await writeAuditLog(this.prisma, {
+        organizationId,
+        userId: callerUserId,
+        action: 'DELETE',
+        resource: 'Employee',
+        resourceId: existing.id,
+        result: 'ALLOW',
+        details: { deactivatedViaTeamOffboarding: true, employeeId: existing.employeeId },
+      });
     }
   }
 

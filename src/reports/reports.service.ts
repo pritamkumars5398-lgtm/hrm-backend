@@ -24,6 +24,15 @@ type EmployeeRow = {
   deletedAt: Date | null;
 };
 
+function extractRawNumber(val: any): number {
+  if (typeof val === 'number') return val;
+  if (!val) return 0;
+  if (val.$numberInt) return parseInt(val.$numberInt, 10);
+  if (val.$numberDouble) return parseFloat(val.$numberDouble);
+  if (val.$numberLong) return parseInt(val.$numberLong, 10);
+  return Number(val) || 0;
+}
+
 @Injectable()
 export class ReportsService {
   constructor(private readonly prisma: PrismaService) {}
@@ -41,8 +50,18 @@ export class ReportsService {
     const month = now.getMonth();
     const monthStart = `${year}-${pad(month + 1)}-01`;
     const todayISO = isoDate(now);
+    const currentMonthKey = `${year}-${pad(month + 1)}`;
 
-    const [records, leaveRequests, allApprovedLeave, approvedExpenses, travelRequests, openTickets, totalAssets] = await Promise.all([
+    const [
+      records,
+      leaveRequests,
+      rawLeaveByEmployee,
+      rawExpenses,
+      travelRequests,
+      openTickets,
+      totalAssets,
+      rawPayroll,
+    ] = await Promise.all([
       activeIds.length
         ? this.prisma.attendanceRecord.findMany({
             where: { organizationId, employeeId: { in: activeIds }, date: { gte: monthStart, lt: todayISO }, checkIn: { not: null } },
@@ -53,9 +72,29 @@ export class ReportsService {
             where: { organizationId, employeeId: { in: activeIds }, status: 'APPROVED', startDate: { lt: todayISO }, endDate: { gte: monthStart } },
           })
         : Promise.resolve([]),
-      this.prisma.leaveRequest.findMany({ where: { organizationId, status: 'APPROVED' } }),
-      this.prisma.expenseClaim.findMany({
-        where: { organizationId, status: { in: ['APPROVED', 'REIMBURSED'] } },
+      this.prisma.leaveRequest.aggregateRaw({
+        pipeline: [
+          { $match: { organizationId, status: 'APPROVED' } },
+          { $group: { _id: '$employeeId', totalDays: { $sum: '$days' } } }
+        ]
+      }),
+      this.prisma.expenseClaim.aggregateRaw({
+        pipeline: [
+          { $match: { organizationId, status: { $in: ['APPROVED', 'REIMBURSED'] } } },
+          {
+            $group: {
+              _id: null,
+              total: {
+                $sum: {
+                  $ifNull: [
+                    '$reimbursedAmount',
+                    { $ifNull: ['$approvedAmount', '$amount'] }
+                  ]
+                }
+              }
+            }
+          }
+        ]
       }),
       this.prisma.travelRequest.count({
         where: { organizationId, status: { in: ['APPROVED', 'BOOKED'] } },
@@ -66,6 +105,19 @@ export class ReportsService {
       this.prisma.asset.count({
         where: { organizationId },
       }),
+      canViewPayroll(permissions)
+        ? this.prisma.payslip.aggregateRaw({
+            pipeline: [
+              { $match: { organizationId, month: currentMonthKey, status: 'FINALIZED' } },
+              {
+                $group: {
+                  _id: null,
+                  total: { $sum: '$snapshot.grossEarnings' }
+                }
+              }
+            ]
+          })
+        : Promise.resolve([]),
     ]);
 
     const attendedKeys = new Set(records.map((r) => `${r.employeeId}:${r.date}`));
@@ -95,9 +147,15 @@ export class ReportsService {
       return expected === 0 ? 0 : round1((attended / expected) * 100);
     };
 
+    const leaveDaysByEmployee = new Map<string, number>(
+      (rawLeaveByEmployee as unknown as Array<{ _id: string; totalDays: any }>).map((item) => [
+        item._id,
+        extractRawNumber(item.totalDays),
+      ])
+    );
+
     const leaveDaysFor = (employeeIds: string[]): number => {
-      const idSet = new Set(employeeIds);
-      return allApprovedLeave.filter((r) => idSet.has(r.employeeId)).reduce((sum, r) => sum + r.days, 0);
+      return employeeIds.reduce((sum, id) => sum + (leaveDaysByEmployee.get(id) ?? 0), 0);
     };
 
     const departmentNames = [...new Set(activeEmployees.map((e) => e.department))];
@@ -123,23 +181,23 @@ export class ReportsService {
 
     let payrollCost: number | null = null;
     if (canViewPayroll(permissions)) {
-      const currentMonthKey = `${year}-${pad(month + 1)}`;
-      const finalizedPayslips = await this.prisma.payslip.findMany({
-        where: { organizationId, month: currentMonthKey, status: 'FINALIZED' },
-      });
-      payrollCost = Math.round(finalizedPayslips.reduce((sum, p) => sum + (p.snapshot?.grossEarnings ?? 0), 0));
+      payrollCost = Math.round(
+        extractRawNumber((rawPayroll as unknown as Array<{ total: any }>)[0]?.total)
+      );
     }
 
     const expenseTotal = Math.round(
-      approvedExpenses.reduce((sum, c) => sum + (c.reimbursedAmount ?? c.approvedAmount ?? c.amount), 0),
+      extractRawNumber((rawExpenses as unknown as Array<{ total: any }>)[0]?.total)
     );
+
+    const totalLeaveDays = [...leaveDaysByEmployee.values()].reduce((sum, d) => sum + d, 0);
 
     return {
       headcount: allEmployees.length,
       activeCount: activeEmployees.length,
       attritionRate: allEmployees.length === 0 ? 0 : round1(((allEmployees.length - activeEmployees.length) / allEmployees.length) * 100),
       avgAttendance: attendanceRateFor(activeEmployees),
-      leaveDaysTaken: allApprovedLeave.reduce((sum, r) => sum + r.days, 0),
+      leaveDaysTaken: totalLeaveDays,
       payrollCost,
       expenseTotal,
       travelCount: travelRequests,

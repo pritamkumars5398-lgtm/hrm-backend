@@ -137,7 +137,7 @@ export class InvitesService {
     }
 
     // 3. Create Membership — the pre-check above guarantees none exists yet.
-    await this.prisma.membership.create({
+    const createdMembership = await this.prisma.membership.create({
       data: {
         id: `mem-${randomUUID().slice(0, 8)}`,
         userId: user.id,
@@ -145,6 +145,16 @@ export class InvitesService {
         jobTitle: params.jobTitle || 'Employee',
         permissions: params.permissions,
       },
+    });
+
+    await writeAuditLog(this.prisma, {
+      organizationId: params.organizationId,
+      userId: params.invitedBy,
+      action: 'CREATE',
+      resource: 'Membership',
+      resourceId: createdMembership.id,
+      result: 'ALLOW',
+      details: { invitedUserId: user.id, permissions: params.permissions },
     });
 
     let targetEmployeeId = '';
@@ -232,6 +242,16 @@ export class InvitesService {
       },
     })) as Invite;
 
+    await writeAuditLog(this.prisma, {
+      organizationId: params.organizationId,
+      userId: params.invitedBy,
+      action: 'CREATE',
+      resource: 'Invite',
+      resourceId: invite.id,
+      result: 'ALLOW',
+      details: { email: invite.email },
+    });
+
     // A brand-new account has no push tokens yet — this still lands as a real
     // in-app notification waiting for them the moment they log in.
     await this.notifications.create({
@@ -266,21 +286,33 @@ export class InvitesService {
     return invite;
   }
 
-  async revoke(id: string, organizationId: string): Promise<Invite> {
+  async revoke(id: string, organizationId: string, callerUserId: string): Promise<Invite> {
     const invite = await this.findOwned(id, organizationId);
 
     if (invite.status === 'ACCEPTED') {
       throw new BadRequestException('That invite has already been accepted.');
     }
 
-    return (await this.prisma.invite.update({
+    const updated = (await this.prisma.invite.update({
       where: { id },
       data: { status: 'REVOKED' },
     })) as Invite;
+
+    await writeAuditLog(this.prisma, {
+      organizationId,
+      userId: callerUserId,
+      action: 'UPDATE',
+      resource: 'Invite',
+      resourceId: id,
+      result: 'ALLOW',
+      details: { inviteId: id, status: 'REVOKED', email: invite.email },
+    });
+
+    return updated;
   }
 
   /** Issues a fresh token and expiry — the old link stops working. */
-  async resend(id: string, organizationId: string): Promise<Invite> {
+  async resend(id: string, organizationId: string, callerUserId: string): Promise<Invite> {
     const invite = await this.findOwned(id, organizationId);
 
     if (invite.status === 'ACCEPTED') {
@@ -298,6 +330,16 @@ export class InvitesService {
         expiresAt: this.expiryFrom(now),
       },
     })) as Invite;
+
+    await writeAuditLog(this.prisma, {
+      organizationId,
+      userId: callerUserId,
+      action: 'UPDATE',
+      resource: 'Invite',
+      resourceId: id,
+      result: 'ALLOW',
+      details: { inviteId: id, status: 'PENDING_RESEND', email: invite.email },
+    });
 
     // Send invite email (tempPassword is null for resends)
     void this.emailService.sendInvite(updated.email, updated.email.split('@')[0], this.linkFor(updated.token), null);

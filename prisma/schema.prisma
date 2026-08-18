@@ -83,6 +83,7 @@ model Employee {
 
   @@unique([userId, organizationId])
   @@index([organizationId])
+  @@index([organizationId, createdAt])
 }
 
 model Membership {
@@ -546,6 +547,8 @@ model AuditLog {
   result         String   // ALLOW | DENY
   details        String?
   timestamp      DateTime @default(now())
+
+  @@index([organizationId, timestamp])
 }
 
 model ComplianceFramework {

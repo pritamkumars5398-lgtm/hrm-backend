@@ -4,6 +4,7 @@ import { JwtAuthGuard } from '../common/jwt-auth.guard';
 import { PermissionsGuard, RequirePermission } from '../common/permissions.guard';
 import { CurrentMembership } from '../common/current-membership.decorator';
 import type { Membership } from '../users/user.entity';
+import { paginate } from '../common/pagination';
 
 /**
  * Read-only audit log viewer. Requires `settings.manage` — only Owners and
@@ -25,9 +26,8 @@ export class AuditLogsController {
     @Query('from') from?: string,
     @Query('to') to?: string,
     @Query('limit') limit?: string,
+    @Query('cursor') cursor?: string,
   ) {
-    const take = Math.min(parseInt(limit ?? '100', 10), 500);
-
     const where: any = { organizationId: membership.organizationId };
 
     if (resource) where.resource = { contains: resource, mode: 'insensitive' };
@@ -39,10 +39,15 @@ export class AuditLogsController {
       if (to) where.timestamp.lte = new Date(to);
     }
 
-    const logs = await this.prisma.auditLog.findMany({
+    const paginated = await paginate<any>(this.prisma.auditLog, {
       where,
-      orderBy: { timestamp: 'desc' },
-      take,
+      limit,
+      cursor,
+      sortField: 'timestamp',
+      sortDirection: 'desc',
+      organizationId: membership.organizationId,
+      defaultLimit: 100,
+      maxLimit: 500,
       select: {
         id: true,
         userEmail: true,
@@ -51,10 +56,14 @@ export class AuditLogsController {
         resourceId: true,
         result: true,
         timestamp: true,
-        // details excluded from list view — can be verbose; only shown in detail
       },
     });
 
-    return { logs, total: logs.length };
+    return {
+      data: paginated.data,
+      logs: paginated.data, // backward compatibility with React front-end
+      total: paginated.data.length, // backward compatibility with React front-end
+      pagination: paginated.pagination,
+    };
   }
 }

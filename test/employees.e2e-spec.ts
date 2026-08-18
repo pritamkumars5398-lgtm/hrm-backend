@@ -344,4 +344,79 @@ describe('Employees Module (e2e)', () => {
       expect(log).toBeDefined();
     });
   });
+
+  describe('Employee Cursor Pagination', () => {
+    it('returns first page of employees with pagination metadata', async () => {
+      const res = await request(server())
+        .get('/employees')
+        .set('Cookie', hrCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .query({ limit: 1 })
+        .expect(200);
+
+      expect(res.body.data.length).toBe(1);
+      expect(res.body.pagination.limit).toBe(1);
+      expect(res.body.pagination.hasNextPage).toBe(true);
+      expect(typeof res.body.pagination.nextCursor).toBe('string');
+    });
+
+    it('traverses to the next page using nextCursor', async () => {
+      const page1 = await request(server())
+        .get('/employees')
+        .set('Cookie', hrCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .query({ limit: 1 })
+        .expect(200);
+
+      const cursor = page1.body.pagination.nextCursor;
+
+      const page2 = await request(server())
+        .get('/employees')
+        .set('Cookie', hrCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .query({ limit: 1, cursor })
+        .expect(200);
+
+      expect(page2.body.data.length).toBe(1);
+      expect(page2.body.data[0].id).not.toBe(page1.body.data[0].id);
+    });
+
+    it('rejects invalid limit parameters and malformed cursors', async () => {
+      await request(server())
+        .get('/employees')
+        .set('Cookie', hrCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .query({ limit: -5 })
+        .expect(400);
+
+      await request(server())
+        .get('/employees')
+        .set('Cookie', hrCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .query({ limit: 1, cursor: 'not-a-valid-cursor-string' })
+        .expect(400);
+    });
+
+    it('enforces organization scoping context inside cursor', async () => {
+      const page1 = await request(server())
+        .get('/employees')
+        .set('Cookie', hrCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .query({ limit: 1 })
+        .expect(200);
+
+      const cursor = page1.body.pagination.nextCursor;
+
+      const decoded = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
+      decoded.organizationId = 'org-hacker-space';
+      const tamperedCursor = Buffer.from(JSON.stringify(decoded), 'utf8').toString('base64url');
+
+      await request(server())
+        .get('/employees')
+        .set('Cookie', hrCookie)
+        .set('X-Workspace-Id', 'org-alderway')
+        .query({ limit: 1, cursor: tamperedCursor })
+        .expect(400);
+    });
+  });
 });

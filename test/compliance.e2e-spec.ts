@@ -58,8 +58,8 @@ describe('Compliance System (e2e)', () => {
 
     await prisma.user.createMany({
       data: [
-        { id: 'usr-owner', email: 'owner@demo.com', name: 'Priya Nair', avatarInitials: 'PN', passwordHash },
-        { id: 'usr-manager', email: 'manager@demo.com', name: 'Marta Lindqvist', avatarInitials: 'ML', passwordHash },
+        { id: 'usr-2', email: 'owner@demo.com', name: 'Priya Nair', avatarInitials: 'PN', passwordHash },
+        { id: 'usr-3', email: 'manager@demo.com', name: 'Marta Lindqvist', avatarInitials: 'ML', passwordHash },
         { id: 'usr-employee', email: 'employee@demo.com', name: 'Amit Patel', avatarInitials: 'AP', passwordHash },
       ],
     });
@@ -70,14 +70,14 @@ describe('Compliance System (e2e)', () => {
         name: 'Alderway Labs',
         address: '4 Wharf Road, London',
         industry: 'Software & Technology',
-        ownerId: 'usr-owner',
+        ownerId: 'usr-2',
       },
     });
 
     await prisma.membership.createMany({
       data: [
-        { id: 'mem-owner', userId: 'usr-owner', organizationId: orgId, jobTitle: 'Founder & CEO', permissions: ['*'] },
-        { id: 'mem-manager', userId: 'usr-manager', organizationId: orgId, jobTitle: 'HR Manager', permissions: ['compliance.*', 'approvals.*', 'team.*'] },
+        { id: 'mem-2', userId: 'usr-2', organizationId: orgId, jobTitle: 'Founder & CEO', permissions: ['*'] },
+        { id: 'mem-3', userId: 'usr-3', organizationId: orgId, jobTitle: 'HR Manager', permissions: ['compliance.*', 'approvals.*', 'team.*'] },
         { id: 'mem-employee', userId: 'usr-employee', organizationId: orgId, jobTitle: 'Software Engineer', permissions: ['attendance.view', 'leave.view', 'performance.view', 'documents.view', 'compliance.view'] },
       ],
     });
@@ -86,7 +86,7 @@ describe('Compliance System (e2e)', () => {
       data: [
         {
           id: 'emp-alderway-owner',
-          userId: 'usr-owner',
+          userId: 'usr-2',
           organizationId: orgId,
           employeeId: 'EMP-2026-0001',
           firstName: 'Priya',
@@ -99,7 +99,7 @@ describe('Compliance System (e2e)', () => {
         },
         {
           id: 'emp-alderway-manager',
-          userId: 'usr-manager',
+          userId: 'usr-3',
           organizationId: orgId,
           employeeId: 'EMP-2026-0002',
           firstName: 'Marta',

@@ -22,6 +22,7 @@ import { CurrentUser } from '../common/current-user.decorator';
 import type { JwtPayload } from '../common/jwt-payload';
 import type { Membership } from '../users/user.entity';
 import type { PublicEmployee } from './employee.entity';
+import { PaginatedResult } from '../common/pagination';
 
 /**
  * Read-only directory over the Employee identity records created on invite.
@@ -53,8 +54,10 @@ export class EmployeesController {
   list(
     @CurrentMembership() membership: Membership,
     @Query('status') status?: 'ACTIVE' | 'INACTIVE' | 'ALL',
-  ): Promise<PublicEmployee[]> {
-    return this.employeesService.findByOrganization(membership.organizationId, status);
+    @Query('limit') limit?: string,
+    @Query('cursor') cursor?: string,
+  ): Promise<PublicEmployee[] | PaginatedResult<PublicEmployee>> {
+    return this.employeesService.findByOrganization(membership.organizationId, status, limit, cursor);
   }
 
   @Get(':id')

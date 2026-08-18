@@ -99,7 +99,7 @@ export class InvitesController {
     // Employee HR record for this org (if any) is soft-deactivated alongside it,
     // so a removed member can't still show up as active in the directory (§1.3).
     await this.usersService.removeMembership(id, organizationId);
-    await this.employeesService.deactivateForUser(id, organizationId);
+    await this.employeesService.deactivateForUser(id, organizationId, membership.userId);
     return { ok: true };
   }
 
@@ -226,7 +226,7 @@ export class InvitesController {
     @CurrentMembership() membership: Membership,
     @Param('id') id: string,
   ): Promise<{ invite: PublicInvite; inviteLink: string }> {
-    const invite = await this.invitesService.resend(id, membership.organizationId);
+    const invite = await this.invitesService.resend(id, membership.organizationId, membership.userId);
 
     // If we wanted to reissue a temp password on resend, we'd do it here. 
     // But typically Forgot Password is the right flow for existing users.
@@ -244,7 +244,7 @@ export class InvitesController {
     @CurrentMembership() membership: Membership,
     @Param('id') id: string,
   ): Promise<PublicInvite> {
-    return toPublicInvite(await this.invitesService.revoke(id, membership.organizationId));
+    return toPublicInvite(await this.invitesService.revoke(id, membership.organizationId, membership.userId));
   }
 
   private linkFor(token: string): string {
