@@ -1,8 +1,32 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { hhmm, toPublicRecord, type DaySummary, type PublicAttendanceMonth } from './attendance.entity';
 import type { LeaveType } from '../leave/leave.entity';
+import {
+  DEFAULT_GEOFENCE_RADIUS_METERS,
+  distanceMeters,
+  toPublicAttendanceSettings,
+  type PublicAttendanceSettings,
+} from './attendance-settings.entity';
+import type { PunchDto, UpdateAttendanceSettingsDto } from './dto/attendance-settings.dto';
+
+const SETTINGS_SELECT = {
+  geofenceEnabled: true,
+  officeLatitude: true,
+  officeLongitude: true,
+  geofenceRadiusMeters: true,
+} as const;
+
+/** Who may change where people are allowed to punch from. */
+function canConfigure(permissions: string[]): boolean {
+  return (
+    permissions.includes('*') ||
+    permissions.includes('attendance.manage') ||
+    permissions.includes('attendance.*') ||
+    permissions.includes('settings.manage')
+  );
+}
 
 const pad = (n: number) => String(n).padStart(2, '0');
 const isoDate = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -25,7 +49,69 @@ export class AttendanceService {
     return employees.find((e) => !e.deletedAt) ?? null;
   }
 
-  async checkIn(userId: string, organizationId: string): Promise<void> {
+  /** Every member may read this — the check-in button needs to know whether to ask for location. */
+  async getSettings(organizationId: string): Promise<PublicAttendanceSettings> {
+    const org = await this.prisma.organization.findUnique({ where: { id: organizationId }, select: SETTINGS_SELECT });
+    if (!org) {
+      throw new NotFoundException('That company no longer exists.');
+    }
+    return toPublicAttendanceSettings(org);
+  }
+
+  async updateSettings(
+    organizationId: string,
+    permissions: string[],
+    dto: UpdateAttendanceSettingsDto,
+  ): Promise<PublicAttendanceSettings> {
+    if (!canConfigure(permissions)) {
+      throw new ForbiddenException('You do not have permission to change attendance settings.');
+    }
+    if (dto.geofenceEnabled && (dto.officeLatitude == null || dto.officeLongitude == null)) {
+      throw new BadRequestException('Set the office location before turning on the geofence.');
+    }
+
+    const updated = await this.prisma.organization.update({
+      where: { id: organizationId },
+      data: {
+        geofenceEnabled: dto.geofenceEnabled,
+        // A saved location survives turning the fence off, so re-enabling it
+        // doesn't mean re-entering coordinates.
+        ...(dto.officeLatitude !== undefined ? { officeLatitude: dto.officeLatitude } : {}),
+        ...(dto.officeLongitude !== undefined ? { officeLongitude: dto.officeLongitude } : {}),
+        geofenceRadiusMeters: dto.geofenceRadiusMeters ?? DEFAULT_GEOFENCE_RADIUS_METERS,
+      },
+      select: SETTINGS_SELECT,
+    });
+    return toPublicAttendanceSettings(updated);
+  }
+
+  /**
+   * Refuses a punch from outside the office radius. GPS accuracy is credited to
+   * the employee (capped at the radius itself) so a noisy fix at the door isn't
+   * rejected, while a huge reported accuracy can't be used to punch from home.
+   */
+  private async assertWithinGeofence(organizationId: string, punch: PunchDto): Promise<void> {
+    const settings = await this.getSettings(organizationId);
+    if (!settings.geofenceEnabled || settings.officeLatitude == null || settings.officeLongitude == null) {
+      return;
+    }
+
+    if (punch.latitude == null || punch.longitude == null) {
+      throw new BadRequestException('Your company requires your location to mark attendance. Allow location access and try again.');
+    }
+
+    const radius = settings.geofenceRadiusMeters ?? DEFAULT_GEOFENCE_RADIUS_METERS;
+    const distance = distanceMeters(punch.latitude, punch.longitude, settings.officeLatitude, settings.officeLongitude);
+    const tolerance = Math.min(punch.accuracy ?? 0, radius);
+
+    if (distance - tolerance > radius) {
+      throw new ForbiddenException(
+        `You are about ${Math.round(distance)} m from the office — attendance can only be marked within ${radius} m.`,
+      );
+    }
+  }
+
+  async checkIn(userId: string, organizationId: string, punch: PunchDto = {}): Promise<void> {
     const employee = await this.myEmployee(userId, organizationId);
     if (!employee) {
       throw new NotFoundException('No employee record found for you in this company — ask your Owner or HR to add one.');
@@ -40,8 +126,11 @@ export class AttendanceService {
       throw new ConflictException('You have already checked in today.');
     }
 
+    await this.assertWithinGeofence(organizationId, punch);
+    const location = { checkInLatitude: punch.latitude ?? null, checkInLongitude: punch.longitude ?? null };
+
     if (existing) {
-      await this.prisma.attendanceRecord.update({ where: { id: existing.id }, data: { checkIn: new Date() } });
+      await this.prisma.attendanceRecord.update({ where: { id: existing.id }, data: { checkIn: new Date(), ...location } });
     } else {
       await this.prisma.attendanceRecord.create({
         data: {
@@ -50,12 +139,13 @@ export class AttendanceService {
           employeeId: employee.id,
           date: today,
           checkIn: new Date(),
+          ...location,
         },
       });
     }
   }
 
-  async checkOut(userId: string, organizationId: string): Promise<void> {
+  async checkOut(userId: string, organizationId: string, punch: PunchDto = {}): Promise<void> {
     const employee = await this.myEmployee(userId, organizationId);
     if (!employee) {
       throw new NotFoundException('No employee record found for you in this company — ask your Owner or HR to add one.');
@@ -73,7 +163,11 @@ export class AttendanceService {
       throw new BadRequestException('You have already checked out today.');
     }
 
-    await this.prisma.attendanceRecord.update({ where: { id: existing.id }, data: { checkOut: new Date() } });
+    await this.assertWithinGeofence(organizationId, punch);
+    await this.prisma.attendanceRecord.update({
+      where: { id: existing.id },
+      data: { checkOut: new Date(), checkOutLatitude: punch.latitude ?? null, checkOutLongitude: punch.longitude ?? null },
+    });
   }
 
   /**

@@ -1,10 +1,12 @@
-import { BadRequestException, Controller, Get, HttpCode, Post, Query, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, HttpCode, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { AttendanceService } from './attendance.service';
 import { JwtAuthGuard } from '../common/jwt-auth.guard';
 import { PermissionsGuard } from '../common/permissions.guard';
 import { CurrentMembership } from '../common/current-membership.decorator';
 import type { Membership } from '../users/user.entity';
 import type { PublicAttendanceMonth } from './attendance.entity';
+import type { PublicAttendanceSettings } from './attendance-settings.entity';
+import { PunchDto, UpdateAttendanceSettingsDto } from './dto/attendance-settings.dto';
 
 /** No `@RequirePermission` on this controller's endpoints means the guard never
  *  requires `request.membership` to be set — same gap `organizations.controller.ts`
@@ -30,18 +32,33 @@ export class AttendanceController {
 
   @Post('check-in')
   @HttpCode(200)
-  async checkIn(@CurrentMembership() m: Membership | undefined): Promise<{ ok: true }> {
+  async checkIn(@CurrentMembership() m: Membership | undefined, @Body() punch: PunchDto): Promise<{ ok: true }> {
     const membership = requireMembership(m);
-    await this.attendanceService.checkIn(membership.userId, membership.organizationId);
+    await this.attendanceService.checkIn(membership.userId, membership.organizationId, punch);
     return { ok: true };
   }
 
   @Post('check-out')
   @HttpCode(200)
-  async checkOut(@CurrentMembership() m: Membership | undefined): Promise<{ ok: true }> {
+  async checkOut(@CurrentMembership() m: Membership | undefined, @Body() punch: PunchDto): Promise<{ ok: true }> {
     const membership = requireMembership(m);
-    await this.attendanceService.checkOut(membership.userId, membership.organizationId);
+    await this.attendanceService.checkOut(membership.userId, membership.organizationId, punch);
     return { ok: true };
+  }
+
+  @Get('settings')
+  async getSettings(@CurrentMembership() m: Membership | undefined): Promise<PublicAttendanceSettings> {
+    const membership = requireMembership(m);
+    return this.attendanceService.getSettings(membership.organizationId);
+  }
+
+  @Patch('settings')
+  async updateSettings(
+    @CurrentMembership() m: Membership | undefined,
+    @Body() dto: UpdateAttendanceSettingsDto,
+  ): Promise<PublicAttendanceSettings> {
+    const membership = requireMembership(m);
+    return this.attendanceService.updateSettings(membership.organizationId, membership.permissions, dto);
   }
 
   @Get('month')

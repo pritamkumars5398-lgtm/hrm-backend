@@ -118,6 +118,13 @@ model Organization {
   // Day-of-month range, used when RANGE — e.g. 1-7 for "first week".
   payCycleRangeStart Int?
   payCycleRangeEnd   Int?
+
+  // Attendance geofence — when enabled, check-in/out must come from within
+  // geofenceRadiusMeters of the office point. Null/false means "anywhere".
+  geofenceEnabled      Boolean?
+  officeLatitude       Float?
+  officeLongitude      Float?
+  geofenceRadiusMeters Int?
 }
 
 model Invite {
@@ -144,6 +151,11 @@ model AttendanceRecord {
   date           String
   checkIn        DateTime?
   checkOut       DateTime?
+  // Where the punch came from, when the browser shared it — kept for audit.
+  checkInLatitude   Float?
+  checkInLongitude  Float?
+  checkOutLatitude  Float?
+  checkOutLongitude Float?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime? @updatedAt
 
@@ -352,72 +364,116 @@ model Candidate {
 }
 
 model Timesheet {
-  id             String   @id @map("_id")
+  id             String    @id @map("_id")
   organizationId String
-  employeeId     String
-  weekStartDate  String // YYYY-MM-DD
-  status         String // DRAFT | SUBMITTED | APPROVED | REJECTED
-  totalHours     Float    @default(0)
-  createdAt      DateTime @default(now())
+  userId         String?
+  employeeId     String?
+  employeeName   String    @default("")
+  weekStartDate  String    // YYYY-MM-DD
+  status         String    @default("DRAFT") // DRAFT | SUBMITTED | APPROVED | REJECTED
+  rowsJson       String    @default("[]") // JSON string of TimeRow[]
+  totalHours     Float     @default(0)
+  billableHours  Float     @default(0)
+  submittedAt    DateTime?
+  approvedAt     DateTime?
+  approvedBy     String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime? @updatedAt
+
+  @@index([organizationId, weekStartDate])
 }
 
 model Asset {
-  id             String   @id @map("_id")
+  id             String    @id @map("_id")
   organizationId String
   name           String
   assetTag       String
-  category       String // Laptop | Desktop | Mobile | SIM | Accessory
-  status         String // AVAILABLE | ASSIGNED | REPAIR | RETIRED
+  category       String    // Laptop | Desktop | Mobile | SIM | Accessory | License
+  status         String    @default("AVAILABLE") // AVAILABLE | ASSIGNED | REPAIR | RETIRED
+  assignedTo     String    @default("Unassigned")
   assignedToId   String?
   serialNumber   String?
-  createdAt      DateTime @default(now())
+  purchaseDate   String?
+  conditionNotes String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime? @updatedAt
+
+  @@index([organizationId, status])
+  @@index([organizationId, assetTag])
 }
 
 model ExpenseClaim {
-  id             String   @id @map("_id")
+  id             String    @id @map("_id")
   organizationId String
-  employeeId     String
+  employeeId     String?
+  employee       String    @default("Employee")
   title          String
-  category       String // Travel | Food | Fuel | Hotel | Miscellaneous
+  category       String    // Travel | Food | Fuel | Hotel | Client Dinner | Misc
   amount         Float
-  status         String // PENDING | APPROVED | REJECTED | REIMBURSED
+  date           String?   // YYYY-MM-DD
+  status         String    @default("SUBMITTED") // SUBMITTED | APPROVED | REJECTED | REIMBURSED
   receiptUrl     String?
-  createdAt      DateTime @default(now())
+  receiptName    String?   @default("receipt.pdf")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime? @updatedAt
+
+  @@index([organizationId, status])
 }
 
 model TravelRequest {
-  id             String   @id @map("_id")
+  id             String    @id @map("_id")
   organizationId String
-  employeeId     String
+  employeeId     String?
+  employee       String    @default("Employee")
   destination    String
   startDate      String
   endDate        String
   purpose        String
   estimatedCost  Float
-  status         String // PENDING | APPROVED | BOOKED | REJECTED
-  createdAt      DateTime @default(now())
+  status         String    @default("PENDING") // PENDING | APPROVED | BOOKED | REJECTED
+  ticketUrl      String?
+  hotelDetails   String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime? @updatedAt
+
+  @@index([organizationId, status])
 }
 
 model HelpdeskTicket {
-  id             String   @id @map("_id")
+  id             String    @id @map("_id")
   organizationId String
-  employeeId     String
+  ticketNo       String    // HD-1092
+  employeeId     String?
+  requestedBy    String    @default("Employee")
+  assignedTo     String    @default("Support Desk")
   subject        String
-  category       String // HR | IT | Finance | Admin
-  priority       String // LOW | MEDIUM | HIGH | URGENT
-  status         String // OPEN | IN_PROGRESS | RESOLVED | CLOSED
-  assignedToId   String?
-  createdAt      DateTime @default(now())
+  category       String    // HR | IT | Finance | Admin
+  priority       String    @default("MEDIUM") // LOW | MEDIUM | HIGH | URGENT
+  status         String    @default("OPEN") // OPEN | IN_PROGRESS | RESOLVED | CLOSED
+  slaHoursLeft   Int       @default(24)
+  notes          String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime? @updatedAt
+
+  @@index([organizationId, status])
+  @@index([organizationId, ticketNo])
 }
 
 model Course {
-  id             String   @id @map("_id")
-  organizationId String
-  title          String
-  category       String
-  durationMins   Int
-  description    String?
-  createdAt      DateTime @default(now())
+  id              String    @id @map("_id")
+  organizationId  String
+  title           String
+  category        String    // Compliance | Engineering | Management | Security
+  durationMins    Int       @default(60)
+  progressPercent Int       @default(0)
+  isMandatory     Boolean   @default(false)
+  instructor      String    @default("HR Training Desk")
+  description     String?
+  quizQuestions   String    @default("[]") // JSON string
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime? @updatedAt
+
+  @@index([organizationId, category])
 }
 
 model FeedPost {
@@ -442,6 +498,17 @@ model FormDefinition {
   createdAt      DateTime @default(now())
 }
 
+model FormResponse {
+  id             String   @id @map("_id")
+  formId         String
+  organizationId String
+  respondentName String
+  answersJson    String   // JSON string of answers
+  submittedAt    DateTime @default(now())
+
+  @@index([organizationId, formId])
+}
+
 model Tenant {
   id             String   @id @map("_id")
   name           String
@@ -464,4 +531,184 @@ model AuditLog {
   timestamp      DateTime @default(now())
 }
 
+model JobPosting {
+  id              String   @id @map("_id")
+  organizationId  String
+  title           String
+  department      String
+  location        String   @default("Remote / Hybrid")
+  type            String   @default("Full-time")
+  experienceLevel String   @default("Mid-Level")
+  salaryRange     String?
+  description     String   @default("")
+  requirements    String[] @default([])
+  benefits        String[] @default([])
+  headcount       Int      @default(1)
+  status          String   @default("OPEN") // OPEN | CLOSED | DRAFT
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([organizationId, status])
+}
+
+model JobApplication {
+  id              String    @id @map("_id")
+  jobPostingId    String
+  organizationId  String
+  candidateName   String
+  email           String
+  phone           String    @default("")
+  resumeUrl       String?
+  coverLetter     String?
+  experienceYears Float?    @default(0)
+  expectedSalary  String?
+  status          String    @default("APPLIED") // APPLIED | SCREENED | INTERVIEW | OFFERED | HIRED | REJECTED
+  interviewDate   DateTime?
+  notes           String?
+  aiScore         Int       @default(85)
+  appliedAt       DateTime  @default(now())
+
+  @@index([organizationId, jobPostingId])
+  @@index([jobPostingId, status])
+}
+
+model OnboardingTracker {
+  id                String   @id @map("_id")
+  organizationId    String
+  employeeId        String?
+  name              String
+  email             String   @default("")
+  jobTitle          String
+  department        String
+  joiningDate       String
+  buddy             String   @default("Unassigned")
+  status            String   @default("IN_PROGRESS") // IN_PROGRESS | COMPLETED
+  checklistProgress Int      @default(0)
+  tasksJson         String   @default("[]") // JSON string of OnboardingTask[]
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([organizationId, status])
+}
+
+model EngagementPost {
+  id             String    @id @map("_id")
+  organizationId String
+  author         String
+  role           String    @default("Team Member")
+  type           String    // KUDOS | ANNOUNCEMENT | BIRTHDAY | ANNIVERSARY
+  content        String
+  targetUser     String?
+  badge          String?   // Team Player | Star Performer | Problem Solver | Culture Champion
+  likes          Int       @default(0)
+  likedBy        String[]  @default([])
+  commentsCount  Int       @default(0)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime? @updatedAt
+
+  @@index([organizationId, createdAt])
+}
+
+model ChatMessage {
+  id             String   @id @map("_id")
+  organizationId String
+  channel        String   @default("GENERAL") // GENERAL | HR_DESK | ANNOUNCEMENTS
+  sender         String
+  senderRole     String?  @default("Employee")
+  text           String
+  createdAt      DateTime @default(now())
+
+  @@index([organizationId, channel, createdAt])
+}
+
+model WhatsAppMessage {
+  id             String   @id @map("_id")
+  organizationId String
+  sender         String
+  text           String
+  isBot          Boolean  @default(false)
+  intent         String?  // LEAVE | PAYSLIP | ATTENDANCE | GENERAL
+  status         String   @default("DELIVERED") // SENT | DELIVERED | READ
+  createdAt      DateTime @default(now())
+
+  @@index([organizationId, createdAt])
+}
+
+model WorkflowRule {
+  id             String    @id @map("_id")
+  organizationId String
+  name           String
+  trigger        String
+  condition      String    @default("True")
+  action         String
+  status         String    @default("ACTIVE") // ACTIVE | PAUSED
+  executedCount  Int       @default(0)
+  lastExecutedAt DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime? @updatedAt
+
+  @@index([organizationId, status])
+}
+
+model ComplianceRecord {
+  id                String    @id @map("_id")
+  organizationId    String
+  name              String
+  authority         String    // EPFO India | ESIC Corporation | Income Tax Department | State Tax Dept | Labour Welfare Board
+  dueDate           String
+  status            String    @default("UPCOMING") // UPCOMING | PENDING | FILED
+  penaltyRisk       String
+  filedDate         String?
+  acknowledgementNo String?
+  period            String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime? @updatedAt
+
+  @@index([organizationId, status])
+}
+
+model AiCopilotLog {
+  id             String   @id @map("_id")
+  organizationId String
+  userId         String
+  query          String
+  response       String
+  category       String?  @default("GENERAL") // PAYROLL | ATTRITION | POLICY | GENERAL
+  createdAt      DateTime @default(now())
+
+  @@index([organizationId, userId, createdAt])
+}
+
+model FormerEmployee {
+  id                 String    @id @map("_id")
+  organizationId     String
+  employeeId         String?
+  name               String
+  jobTitle           String
+  department         String
+  exitDate           String
+  fnfStatus          String    @default("IN_PROCESS") // SETTLED | IN_PROCESS
+  relievingLetterUrl String?
+  exitReason         String?
+  handoverComplete   Boolean   @default(true)
+  settledAmount      Float?
+  settledDate        String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime? @updatedAt
+
+  @@index([organizationId, fnfStatus])
+}
+
+model EmailLog {
+  id             String   @id @map("_id")
+  organizationId String?
+  to             String
+  subject        String
+  template       String   // INVITE | LEAVE_NOTIFICATION | KUDOS | PASSWORD_RESET | TEST
+  status         String   // SENT | FAILED | SIMULATED
+  error          String?
+  createdAt      DateTime @default(now())
+
+  @@index([to, createdAt])
+}
 

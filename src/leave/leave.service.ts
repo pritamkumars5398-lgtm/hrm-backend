@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, ForbiddenException, Injectable,
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { EmailService } from '../common/email.service';
 import type { ApplyLeaveDto } from './dto/apply-leave.dto';
 import type { UpdateLeavePolicyDto } from './dto/update-leave-policy.dto';
 import {
@@ -26,6 +27,7 @@ export class LeaveService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
+    private readonly emailService: EmailService,
   ) {}
 
   /**
@@ -209,6 +211,22 @@ export class LeaveService {
       });
     }
 
+    const org = await this.prisma.organization.findUnique({
+      where: { id: organizationId },
+      select: { leaveNotificationEmail: true },
+    });
+    if (org?.leaveNotificationEmail) {
+      await this.emailService.sendLeaveNotification(
+        org.leaveNotificationEmail,
+        `${me.firstName} ${me.lastName}`,
+        dto.type,
+        dto.startDate,
+        dto.endDate,
+        dto.reason,
+        'PENDING',
+      );
+    }
+
     return toPublicRequest(created, me, null);
   }
 
@@ -264,6 +282,22 @@ export class LeaveService {
       kind: 'leave',
       link: '/dashboard/leave',
     });
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: employee.userId },
+      select: { email: true },
+    });
+    if (user?.email) {
+      await this.emailService.sendLeaveNotification(
+        user.email,
+        `${employee.firstName} ${employee.lastName}`,
+        updated.type,
+        updated.startDate,
+        updated.endDate,
+        updated.reason || '',
+        decision,
+      );
+    }
 
     return toPublicRequest(updated, employee, decider?.name ?? null);
   }
