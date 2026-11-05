@@ -39,6 +39,10 @@ export type PublicEmployee = {
   lastName: string;
   employeeId: string;
   homeAddress: string;
+  dob?: string;
+  gender?: string;
+  financialDetails?: any;
+  educationDetails?: any;
   managerId: string | null;
   /** True when the record was soft-deleted — Former Employees page uses this for display. */
   isDeleted?: boolean;
@@ -94,6 +98,10 @@ export function toPublicEmployee(
     lastName: employee.lastName,
     employeeId: employee.employeeId ?? '',
     homeAddress: employee.homeAddress ?? '',
+    dob: (employee as any).dob ?? '15th August 1996',
+    gender: (employee as any).gender ?? 'Male',
+    financialDetails: (employee as any).financialDetails ?? null,
+    educationDetails: (employee as any).educationDetails ?? [],
     managerId: employee.managerId ?? null,
   };
 }

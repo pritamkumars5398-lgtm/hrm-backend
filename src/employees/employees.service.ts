@@ -114,6 +114,9 @@ export class EmployeesService {
     if (patch.employeeId !== undefined) data.employeeId = patch.employeeId;
     if (patch.contactNumber !== undefined) data.contactNumber = patch.contactNumber;
     if (patch.homeAddress !== undefined) data.homeAddress = patch.homeAddress;
+    if (patch.dob !== undefined) data.dob = patch.dob;
+    if (patch.gender !== undefined) data.gender = patch.gender;
+    if (patch.financialDetails !== undefined) data.financialDetails = patch.financialDetails;
     if (patch.jobTitle !== undefined) data.jobTitle = patch.jobTitle;
     if (patch.department !== undefined) data.department = patch.department;
     if (patch.employmentType !== undefined) data.employmentType = patch.employmentType;

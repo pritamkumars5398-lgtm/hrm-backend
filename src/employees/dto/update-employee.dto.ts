@@ -28,6 +28,17 @@ export class UpdateEmployeeDto {
 
   @IsString()
   @IsOptional()
+  dob?: string;
+
+  @IsString()
+  @IsOptional()
+  gender?: string;
+
+  @IsOptional()
+  financialDetails?: any;
+
+  @IsString()
+  @IsOptional()
   jobTitle?: string;
 
   @IsString()
