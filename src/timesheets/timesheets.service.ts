@@ -251,7 +251,7 @@ export class TimesheetsService {
         userId: timesheet.userId,
         organizationId,
         title: 'Timesheet Sent Back for Revisions',
-        body: Your timesheet for week ${timesheet.weekStartDate} was returned by ${rejecterName}: ${reason || 'Please adjust hours'}.,
+        body: `Your timesheet for week ${timesheet.weekStartDate} was returned by ${rejecterName}: ${reason || 'Please adjust hours'}.`,
         kind: 'timesheets',
         link: '/dashboard/timesheets',
       });

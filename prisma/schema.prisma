@@ -377,6 +377,7 @@ model Timesheet {
   submittedAt    DateTime?
   approvedAt     DateTime?
   approvedBy     String?
+  rejectionReason String?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime? @updatedAt
 
