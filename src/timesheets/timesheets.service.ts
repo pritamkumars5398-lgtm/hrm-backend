@@ -232,6 +232,45 @@ export class TimesheetsService {
     };
   }
 
+  async rejectTimesheet(organizationId: string, id: string, rejecterName: string, reason: string) {
+    const timesheet = await this.prisma.timesheet.findFirst({
+      where: { id, organizationId },
+    });
+    if (!timesheet) throw new NotFoundException('Timesheet not found.');
+
+    const updated = await this.prisma.timesheet.update({
+      where: { id },
+      data: {
+        status: 'REJECTED',
+        rejectionReason: reason || 'Needs revisions by employee.',
+      },
+    });
+
+    if (timesheet.userId) {
+      await this.notifications.create({
+        userId: timesheet.userId,
+        organizationId,
+        title: 'Timesheet Sent Back for Revisions',
+        body: Your timesheet for week ${timesheet.weekStartDate} was returned by ${rejecterName}: ${reason || 'Please adjust hours'}.,
+        kind: 'timesheets',
+        link: '/dashboard/timesheets',
+      });
+    }
+
+    let rows: TimeRow[] = [];
+    try {
+      rows = JSON.parse(updated.rowsJson || '[]');
+    } catch {
+      rows = [];
+    }
+
+    return {
+      ...updated,
+      rows,
+      createdAt: updated.createdAt.toISOString().slice(0, 10),
+    };
+  }
+
   async getAll(organizationId: string) {
     const list = await this.prisma.timesheet.findMany({
       where: { organizationId },

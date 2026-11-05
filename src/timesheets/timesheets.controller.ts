@@ -60,6 +60,20 @@ export class TimesheetsController {
     );
   }
 
+  @Patch(':id/reject')
+  reject(
+    @CurrentMembership() membership: Membership,
+    @Param('id') id: string,
+    @Body('reason') reason?: string,
+  ) {
+    return this.timesheetsService.rejectTimesheet(
+      membership.organizationId,
+      id,
+      membership.jobTitle || 'Manager',
+      reason || 'Adjustments required',
+    );
+  }
+
   @Patch(':id/approve')
   approve(
     @CurrentMembership() membership: Membership,
